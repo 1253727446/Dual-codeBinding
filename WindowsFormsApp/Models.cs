@@ -1,0 +1,44 @@
+﻿
+
+namespace WindowsFormsApp
+{
+    /// <summary>
+    /// 小件定义
+    /// </summary>
+    public class SubMaterialDef
+    {
+        public string Bydpn { get; set; }      // 小件名称
+        public string Did { get; set; }        // 绑定的小件码
+        public string DidRule { get; set; }    // 条码匹配规则（分号分隔）
+        public double Qty { get; set; }        // 每产品用量
+        public string Remarks { get; set; }    // 默认上料数量（初始剩余数量）
+    }
+    /// <summary>
+    /// TestDataCollect2MainChild 接口中 TEST_DATA_LIST 的单项
+    /// </summary>
+    public class TestDataItem
+    {
+        public string NAME { get; set; }
+        public string VALUE { get; set; }
+        public string TEST_RESULT { get; set; }
+        public string MAX_VALUE { get; set; }
+        public string MIN_VALUE { get; set; }
+        public string STANDARD_VALUE { get; set; }
+    }
+
+    /// <summary>
+    /// 用来给下拉框展示”哪些行可以和当前输入的小件码匹配”。
+    /// </summary>
+    public class MatchCandidate
+    {
+        /// <summary>
+        /// DataTable 里对应的行索引，后续真正绑定时就靠它定位。
+        /// </summary>
+        public int RowIndex { get; set; }
+
+        /// <summary>
+        /// 下拉框展示给用户看的文字。
+        /// </summary>
+        public string DisplayText { get; set; }
+    }
+}

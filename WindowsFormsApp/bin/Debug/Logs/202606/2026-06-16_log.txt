@@ -1,0 +1,11 @@
+[2026-06-16 17:08:00:264]: GetCustomData Send:http://10.6.78.14/Service.action?method=GetCustomData&param={"LOGIN_ID":"-1","CLIENT_ID":"1","PROJECT_ID":"1481","PRODUCT_ID":"3868","STATION_ID":"13374","LINE":"F1-1F-Roll-A","PROJECT_NAME":"Polaris","PRODUCT_NAME":"A604-63011-EVT-01"}
+[2026-06-16 17:08:01:452]: GetCustomData Error:操作超时
+[2026-06-16 17:08:01:464]: [2026-06-16 17:08:01]: 操作超时
+[2026-06-16 17:08:01:499]: GetLoadSubsByLoadId Send:http://10.6.78.14/Service.action?method=GetLoadSubsByLoadId&param={"LOGIN_ID":"-1","CLIENT_ID":"1","LOAD_ID":"-1","STATION":"磁铁组装1"}
+[2026-06-16 17:08:02:531]: GetLoadSubsByLoadId Error:操作超时
+[2026-06-16 17:08:02:536]: [2026-06-16 17:08:02]: GetLoadSubsByLoadId获取小件信息成功
+[2026-06-16 17:08:04:769]: [2026-06-16 17:08:04]: 扫码枪连接失败
+[2026-06-16 17:08:04:893]: [2026-06-16 17:08:04]: PLC连接失败：Socket Connect 127.0.0.1:9600 Exception -> 由于目标计算机积极拒绝，无法连接。 127.0.0.1:9600
+[2026-06-16 17:08:06:951]: [2026-06-16 17:08:06]: 已切换为 UDP 模式，重新连接PLC...
+[2026-06-16 17:08:06:960]: [2026-06-16 17:08:06]: PLC重连第1/5次尝试...
+[2026-06-16 17:08:07:052]: [2026-06-16 17:08:07]: PLC重连成功（第1次尝试）

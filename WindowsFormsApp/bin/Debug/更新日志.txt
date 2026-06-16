@@ -1,0 +1,45 @@
+============================================
+  磁铁自动化 更新日志
+============================================
+
+2026-05-24
+----------
+- 小件校验弹窗改为UI日志警告，校验失败不再弹窗打断产线操作
+- DataReceived 也加入 startscanswitch 判断，关闭时跳过 D3000 校验直接处理扫码
+- 添加 startscanswitch 开关控制扫码信号监听和超时检测
+- 使用 Mutex 实现单实例控制，防止程序多开
+
+2026-05-13
+----------
+- 提取 ValidateGlueStock 和 UploadConfigBinding 为独立方法
+- ConfigCombox 下拉框 + AddSfcKey 接口上传 Config 绑定
+- 批量重置绑定时恢复剩余数量等于总数
+- 总数为0的小件禁止绑定
+
+2026-05-09
+----------
+- PLC 写操作日志 + MACHINE_NO 上报 + 心跳固定写1
+- FormHelper 只管文件日志，MainForm 调用方控制 UI 显示
+- 接口日志统一 PASS文件/FAIL双写，删除未调用接口，修复全屏表格消失bug
+
+2026-05-07
+----------
+- PLC 心跳轮询不记日志，仅记录 D3000 信号变化
+- PLC 读写日志 + 接口日志 RT/RX 改为 Send/Receive
+- D3000=1 时向扫码枪发送 startorder 指令
+- 下拉框使用 ShowDropDown 展开，SelectedIndex=-1 确保点击绑定生效
+- 删除执行绑定按钮，下拉框自动展开并点击直接绑定
+
+更早版本
+----------
+- PLC 端口号从 setting.ini [PLC] PORT 读取
+- 胶水校验启用时在 TestDataCollect 上报胶水 DID 信息
+- D3001 替换为 mesresult 配置变量，扫码超时后复位 startscan
+- startorder 重命名为 startscan，扫码地址由配置驱动
+- 新增 TCP/UDP 切换控件 + HslCommunication DLL
+- PLC 断连实时检测与自动重连
+- 窗体关闭时 CTS 已释放异常修复 + TCP 断连线程池耗尽修复
+- AddLogMessage 着色（成功绿/失败红）、扫码枪断连实时检测
+- 本地持久化 pass/fail 计数器（counters.json）
+- PLC 地址监控面板（D3000/D3001/D5000 实时显示）
+- 初始版本：MES 工站客户端，SFC 扫码过站与小件管理

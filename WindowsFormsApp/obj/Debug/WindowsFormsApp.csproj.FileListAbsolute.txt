@@ -1,0 +1,112 @@
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe.config
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.pdb
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\SimpleTCP.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.dll
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.xml
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.xml
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.xml
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.xml
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.AssemblyReference.cache
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe.config
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.MainForm.resources
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.Properties.Resources.resources
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.GenerateResource.cache
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.CoreCompileInputs.cache
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsF.5F5EF213.Up2Date
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe
+C:\Users\li.ke69\Downloads\demo-master (4)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.pdb
+D:\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe.config
+D:\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe
+D:\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.pdb
+D:\demo-master\WindowsFormsApp\bin\Debug\IoTClient.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\SimpleTCP.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.dll
+D:\demo-master\WindowsFormsApp\bin\Debug\IoTClient.xml
+D:\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.xml
+D:\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.xml
+D:\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.xml
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.AssemblyReference.cache
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.MainForm.resources
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.Properties.Resources.resources
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.GenerateResource.cache
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.CoreCompileInputs.cache
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsF.5F5EF213.Up2Date
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe
+D:\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.pdb
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe.config
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.pdb
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\SimpleTCP.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.dll
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.xml
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.xml
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.xml
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.xml
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.xml
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.AssemblyReference.cache
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.MainForm.resources
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.Properties.Resources.resources
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.GenerateResource.cache
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.CoreCompileInputs.cache
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsF.5F5EF213.Up2Date
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe
+C:\Users\li.ke69\Downloads\demo-master (9)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.pdb
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe.config
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.pdb
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\IoTClient.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\SimpleTCP.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.dll
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.xml
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\IoTClient.xml
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.xml
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.xml
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.xml
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.AssemblyReference.cache
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.MainForm.resources
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.Properties.Resources.resources
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.GenerateResource.cache
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.CoreCompileInputs.cache
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsF.5F5EF213.Up2Date
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe
+D:\C#\Magnet1.0\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.pdb
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe.config
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.exe
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\WindowsFormsApp.pdb
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\SimpleTCP.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.dll
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\HslCommunication.xml
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\IoTClient.xml
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\Newtonsoft.Json.xml
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\SunnyUI.Common.xml
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\bin\Debug\System.IO.Ports.xml
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.AssemblyReference.cache
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.MainForm.resources
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.Properties.Resources.resources
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.GenerateResource.cache
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.csproj.CoreCompileInputs.cache
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsF.5F5EF213.Up2Date
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.exe
+C:\Users\13657\Downloads\Magnet1.0 (2)\demo-master\WindowsFormsApp\obj\Debug\WindowsFormsApp.pdb
