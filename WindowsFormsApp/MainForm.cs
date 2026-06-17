@@ -100,6 +100,10 @@ namespace WindowsFormsApp
         private System.Windows.Forms.Timer _scanHealthTimer;
         /// <summary>PLC 是否正在重连中（防止重复触发）</summary>
         private bool _plcReconnecting;
+        /// <summary>PLC 连续读取失败计数（UDP 模式下容忍偶发丢包，连续失败 N 次才断开）</summary>
+        private int _plcReadFailCount;
+        /// <summary>UDP 模式下连续读取失败多少次才判定断开</summary>
+        private const int UdpFailThreshold = 5;
         /// <summary>扫码枪是否正在重连中（防止重复触发）</summary>
         private bool _scanReconnecting;
         /// <summary>D3000 扫码信号是否已就绪（1=允许扫码）</summary>
@@ -148,10 +152,8 @@ namespace WindowsFormsApp
             }
             else
             {
-                _plcUdp = new OmronFinsUdp("192.168.250.30", port);
+                _plcUdp = new OmronFinsUdp(ip, port);
                 _plcUdp.ReceiveTimeOut = 2000;
-                _plcUdp.Node = 50;
-                _plcUdp.LocalNode = 50;
                 // UDP 无连接，不标记已连接——由后续 Read 验证通过后再标记
                 return new OperateResult { IsSuccess = true, Message = "UDP ready" };
             }
@@ -412,10 +414,21 @@ namespace WindowsFormsApp
                     var d3k = PlcReadInt16(startscan);
                     if (!d3k.IsSuccess)
                     {
+                        // UDP 无连接，偶发丢包正常；连续失败 N 次才判定断开
+                        // TCP 面向连接，一次失败即断开
+                        if (!_plcIsTcp)
+                        {
+                            _plcReadFailCount++;
+                            if (_plcReadFailCount < UdpFailThreshold)
+                                return; // 容忍偶发失败，不触发重连
+                        }
                         _plcConnected = false;
+                        _plcReadFailCount = 0;
                         SetPlcStatus(false);
                         return;
                     }
+                    // 读取成功 → 清零连续失败计数
+                    _plcReadFailCount = 0;
                     UpdateMonitorCell(0, d3k.Content.ToString());
                     short d3000Val = d3k.Content;
 
@@ -524,6 +537,7 @@ namespace WindowsFormsApp
             try
             {
                 _plcReconnecting = true;
+                _plcReadFailCount = 0;  // 重置连续失败计数
                 string plcip = g_DicMESConfig["Setting"]["plcip"];
                 var token = _cts?.Token ?? CancellationToken.None;
 
