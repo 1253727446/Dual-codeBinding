@@ -46,8 +46,8 @@ namespace WindowsFormsApp
         private string _clientId;
         /// <summary>PLC 通信结果地址 / 启动指令</summary>
         private string mesresult, startscan, _startOrder, _heartbeat;
-        /// <summary>接口超时时间（毫秒）</summary>
-        private int timeout = 0;
+        /// <summary>扫码超时时间（秒），支持小数如 2.5</summary>
+        private double timeout = 0;
         /// <summary>扫码开关：false 时忽略 D3000 扫码信号，不发送 start 指令，关闭超时检测</summary>
         private bool _startScanSwitchEnabled;
         /// <summary>胶水校验是否启用</summary>
@@ -227,7 +227,7 @@ namespace WindowsFormsApp
         {
             startscan = g_DicMESConfig["Setting"]["startscan"];
             _startOrder = g_DicMESConfig["Setting"]["startorder"];
-            timeout = int.Parse(g_DicMESConfig["Setting"]["timeout"]);
+            timeout = double.Parse(g_DicMESConfig["Setting"]["timeout"]);
             mesresult = g_DicMESConfig["Setting"]["mesresult"];
             _heartbeat = g_DicMESConfig["Setting"]["heartbeat"];
             int.TryParse(g_DicMESConfig["Setting"]["plcport"], out _plcPort);
@@ -451,11 +451,11 @@ namespace WindowsFormsApp
                         // 持续为 1 且已就绪：每隔 0.5s 重发 start 指令，并检查是否超时
                         else if (_scanArmed && d3000Val == 1)
                         {
-                            if ((DateTime.Now - _scanArmedTime).TotalMilliseconds > timeout)
+                            if ((DateTime.Now - _scanArmedTime).TotalSeconds > timeout)
                             {
                                 BeginInvoke(new Action(() =>
                                 {
-                                    AddLogMessage($"扫码超时：{startscan}=1 超过 {timeout}ms 未收到扫码数据", Color.Red);
+                                    AddLogMessage($"扫码超时：{startscan}=1 超过 {timeout}秒 未收到扫码数据", Color.Red);
                                     Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
                                     Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
                                     AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
@@ -1345,10 +1345,10 @@ namespace WindowsFormsApp
                             }
 
                             // 超时校验：D3000=1 后是否超过 timeout 才收到扫码
-                            double elapsed = (DateTime.Now - _scanArmedTime).TotalMilliseconds;
+                            double elapsed = (DateTime.Now - _scanArmedTime).TotalSeconds;
                             if (elapsed > timeout)
                             {
-                                AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F0}ms 才收到数据（阈值 {timeout}ms）", Color.Red);
+                                AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
                                 Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
                                 Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
                                 AddLogMessage($"{startscan} 已重置为 0", Color.Blue);

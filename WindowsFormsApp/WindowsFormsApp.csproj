@@ -33,8 +33,8 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="HslCommunication, Version=11.1.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\HslCommunication.11.1.0\lib\net451\HslCommunication.dll</HintPath>
+    <Reference Include="HslCommunication, Version=12.8.3.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\HslCommunication.12.8.3\lib\net451\HslCommunication.dll</HintPath>
     </Reference>
     <Reference Include="IoTClient, Version=1.0.44.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\IoTClient.1.0.44\lib\netstandard2.0\IoTClient.dll</HintPath>
