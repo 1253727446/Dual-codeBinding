@@ -412,69 +412,89 @@ namespace WindowsFormsApp
 
                     // D3000：读取值并刷新表格，同时处理扫码信号 + 超时
                     var d3k = PlcReadInt16(startscan);
-                    if (!d3k.IsSuccess)
+                    bool d3000Ok = d3k.IsSuccess;
+                    if (!d3000Ok)
                     {
-                        // UDP 无连接，偶发丢包正常；连续失败 N 次才判定断开
-                        // TCP 面向连接，一次失败即断开
                         if (!_plcIsTcp)
                         {
+                            // UDP 无连接，偶发丢包正常；连续失败 N 次才判定断开
                             _plcReadFailCount++;
-                            if (_plcReadFailCount < UdpFailThreshold)
-                                return; // 容忍偶发失败，不触发重连
-                        }
-                        _plcConnected = false;
-                        _plcReadFailCount = 0;
-                        SetPlcStatus(false);
-                        return;
-                    }
-                    // 读取成功 → 清零连续失败计数
-                    _plcReadFailCount = 0;
-                    UpdateMonitorCell(0, d3k.Content.ToString());
-                    short d3000Val = d3k.Content;
-
-                    // 仅当 startscanswitch=true 时才监听 D3000 扫码信号、发送 start 指令、检测超时
-                    if (_startScanSwitchEnabled)
-                    {
-                        // 上升沿：D3000 从非 1 变为 1，就绪扫码
-                        if (_prevD3000Value != 1 && d3000Val == 1)
-                        {
-                            ReloadConfig();
-                            AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
-                            _scanArmed = true;
-                            _scanArmedTime = DateTime.Now;
-                            if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
+                            if (_plcReadFailCount >= UdpFailThreshold)
                             {
-                                try { scanclient?.Write(_startOrder); }
-                                catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
+                                _plcConnected = false;
+                                _plcReadFailCount = 0;
+                                SetPlcStatus(false);
+                                // 断开后跳过本轮，等待重连
+                                Interlocked.Exchange(ref _monitorBusy, 0);
+                                return;
                             }
+                            // 未达阈值：跳过 D3000 信号处理（不更新 _prevD3000Value/_scanArmed），
+                            // 但仍刷新 mesresult/heartbeat，避免状态僵死导致下次误判
                         }
-                        // 持续为 1 且已就绪：每隔 0.5s 重发 start 指令，并检查是否超时
-                        else if (_scanArmed && d3000Val == 1)
+                        else
                         {
-                            if ((DateTime.Now - _scanArmedTime).TotalSeconds > timeout)
+                            // TCP 面向连接，一次失败即断开
+                            _plcConnected = false;
+                            SetPlcStatus(false);
+                            Interlocked.Exchange(ref _monitorBusy, 0);
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        // 读取成功 → 清零连续失败计数
+                        _plcReadFailCount = 0;
+                    }
+
+                    if (d3000Ok)
+                    {
+                        UpdateMonitorCell(0, d3k.Content.ToString());
+                        short d3000Val = d3k.Content;
+
+                        // 仅当 startscanswitch=true 时才监听 D3000 扫码信号、发送 start 指令、检测超时
+                        if (_startScanSwitchEnabled)
+                        {
+                            // 上升沿：D3000 从非 1 变为 1，就绪扫码
+                            if (_prevD3000Value != 1 && d3000Val == 1)
                             {
-                                BeginInvoke(new Action(() =>
+                                ReloadConfig();
+                                AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
+                                _scanArmed = true;
+                                _scanArmedTime = DateTime.Now;
+                                if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
                                 {
-                                    AddLogMessage($"扫码超时：{startscan}=1 超过 {timeout}秒 未收到扫码数据", Color.Red);
-                                    Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
-                                    Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
-                                    AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
-                                    MarkFail();
-                                }));
+                                    try { scanclient?.Write(_startOrder); }
+                                    catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
+                                }
+                            }
+                            // 持续为 1 且已就绪：每隔 0.5s 重发 start 指令，并检查是否超时
+                            else if (_scanArmed && d3000Val == 1)
+                            {
+                                if ((DateTime.Now - _scanArmedTime).TotalSeconds > timeout)
+                                {
+                                    BeginInvoke(new Action(() =>
+                                    {
+                                        AddLogMessage($"扫码超时：{startscan}=1 超过 {timeout}秒 未收到扫码数据", Color.Red);
+                                        Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
+                                        Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
+                                        AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
+                                        MarkFail();
+                                    }));
+                                    _scanArmed = false;
+                                }
+                                else if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
+                                {
+                                    try { scanclient?.Write(_startOrder); }
+                                    catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
+                                }
+                            }
+                            // D3000 变为非 1：复位就绪状态
+                            else if (d3000Val != 1)
+                            {
                                 _scanArmed = false;
                             }
-                            else if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
-                            {
-                                try { scanclient?.Write(_startOrder); }
-                                catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
-                            }
+                            _prevD3000Value = d3000Val;
                         }
-                        // D3000 变为非 1：复位就绪状态
-                        else if (d3000Val != 1)
-                        {
-                            _scanArmed = false;
-                        }
-                        _prevD3000Value = d3000Val;
                     }
 
                     bool ok2 = RefreshPlcCell(1, mesresult);
