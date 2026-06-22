@@ -1004,7 +1004,7 @@ namespace WindowsFormsApp
                 string projectName = g_DicMESConfig["Config"]["PROJECT"];
                 string shoporderNo = g_DicMESConfig["Config"]["SapShoporder"];
                 string testStation = g_DicMESConfig["Config"]["Operation"];
-                string fixtureNo = g_DicMESConfig["Setting"]["FIXTURE_NO"];
+                string fixtureNo = g_DicMESConfig["Config"]["TraceStationId"];
                 // 构建 TEST_DATA_LIST：遍历所有小件行
                 var testDataList = new List<TestDataItem>();
                 foreach (DataRow row in _partsTable.Rows)
@@ -1036,18 +1036,23 @@ namespace WindowsFormsApp
                     });
                 }
 
-                // 追加机台号
-                string machineNo = g_DicMESConfig["Setting"].ContainsKey("MACHINE_NO")
-                    ? g_DicMESConfig["Setting"]["MACHINE_NO"] : "";
-                testDataList.Add(new TestDataItem
+                // 追加机台号（machineNoswitch=false 时跳过）
+                bool machineNoswitch = false;
+                bool.TryParse(g_DicMESConfig["SOFTWARE"]["machineNoswitch"], out machineNoswitch);
+                if (machineNoswitch)
                 {
-                    NAME = machineNo,
-                    VALUE = fixtureNo,
-                    TEST_RESULT = "PASS",
-                    MAX_VALUE = "",
-                    MIN_VALUE = "",
-                    STANDARD_VALUE = ""
-                });
+                    string machineNo = g_DicMESConfig["Setting"].ContainsKey("MACHINE_NO")
+                        ? g_DicMESConfig["Setting"]["MACHINE_NO"] : "";
+                    testDataList.Add(new TestDataItem
+                    {
+                        NAME = machineNo,
+                        VALUE = fixtureNo,
+                        TEST_RESULT = "PASS",
+                        MAX_VALUE = "",
+                        MIN_VALUE = "",
+                        STANDARD_VALUE = ""
+                    });
+                }
 
                 bool flag = FormHelper.TestDataCollect2MainChild(
                     _mesUrl, _loginId, _clientId,
@@ -1157,7 +1162,7 @@ namespace WindowsFormsApp
 
         /// <summary>
         /// 向日志 RichTextBox 追加时间戳日志，自动处理跨线程调用；
-        /// 超过 200 行时自动清屏
+        /// 超过 100 行时自动清屏
         /// </summary>
         /// <param name="message">日志内容</param>
         /// <param name="color">文字颜色，默认黑色（成功=Green，失败=Red）</param>
@@ -1170,7 +1175,7 @@ namespace WindowsFormsApp
             }
 
             Color useColor = color ?? Color.Black;
-            if (this.uiRichTextBox1.Lines.Length > 200)
+            if (this.uiRichTextBox1.Lines.Length > 100)
                 this.uiRichTextBox1.Text = string.Empty;
 
             string fe = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "]: ";

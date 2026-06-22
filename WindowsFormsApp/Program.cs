@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Net;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -20,6 +21,10 @@ namespace WindowsFormsApp
                     MessageBox.Show("程序已在运行中，不能重复打开。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
+
+                // 防止连续 HTTP 请求导致 ServicePoint 连接池耗尽，引发卡死
+                ServicePointManager.DefaultConnectionLimit = 100;
+                ServicePointManager.MaxServicePointIdleTime = 5000;
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

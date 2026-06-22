@@ -17,6 +17,8 @@ namespace WindowsFormsApp
             request.ContentType = "application/json; charset=UTF-8";
             request.AutomaticDecompression = DecompressionMethods.GZip;
             request.Timeout = TimeOut;
+            request.ServicePoint.ConnectionLimit = 100;
+            request.ServicePoint.ConnectionLeaseTimeout = 5000;
 
             try
             {

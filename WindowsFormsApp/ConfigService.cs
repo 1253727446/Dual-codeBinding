@@ -39,6 +39,7 @@ namespace WindowsFormsApp
             TryReadValue("Config", "SchedulingID", "SchedulingID", dic);
             TryReadValue("Config", "StationName", "StationName", dic);
             TryReadValue("Config", "PROJECT", "PROJECT", dic);
+            TryReadValue("Config", "TraceStationId", "TraceStationId", dic);
 
             return dic;
         }
@@ -74,6 +75,7 @@ namespace WindowsFormsApp
             TryReadValue("SOFTWARE", "Config", "Config", dic);
             TryReadValue("SOFTWARE", "selectedConfig", "selectedConfig", dic);
             TryReadValue("SOFTWARE", "addSfcKeyDataName", "addSfcKeyDataName", dic);
+            TryReadValue("SOFTWARE", "machineNoswitch", "machineNoswitch", dic);
 
             return dic;
         }
