@@ -463,8 +463,13 @@ namespace WindowsFormsApp
                                 _scanArmedTime = DateTime.Now;
                                 if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
                                 {
-                                    try { scanclient?.Write(_startOrder); }
-                                    catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
+                                    var order = _startOrder;
+                                    var client = scanclient;
+                                    Task.Run(() =>
+                                    {
+                                        try { client?.Write(order); }
+                                        catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
+                                    });
                                 }
                             }
                             // 持续为 1 且已就绪：每隔 0.5s 重发 start 指令，并检查是否超时
@@ -484,13 +489,22 @@ namespace WindowsFormsApp
                                 }
                                 else if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
                                 {
-                                    try { scanclient?.Write(_startOrder); }
-                                    catch (Exception ex) { AddLogMessage("发送startorder失败：" + ex.Message, Color.Red); }
+                                    var order = _startOrder;
+                                    var client = scanclient;
+                                    Task.Run(() =>
+                                    {
+                                        try { client?.Write(order); }
+                                        catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
+                                    });
                                 }
                             }
                             // D3000 变为非 1：复位就绪状态
                             else if (d3000Val != 1)
                             {
+                                if (_scanArmed)
+                                {
+                                    BeginInvoke(new Action(() => AddLogMessage($"扫码信号丢失：{startscan} 从 1 变为 {d3000Val}，复位就绪状态", Color.Orange)));
+                                }
                                 _scanArmed = false;
                             }
                             _prevD3000Value = d3000Val;
