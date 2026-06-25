@@ -1,8 +1,9 @@
-﻿
+
 using System.IO;
 using System.Net;
 using System.Text;
 using System;
+using System.Threading;
 
 namespace WindowsFormsApp
 {
@@ -20,6 +21,17 @@ namespace WindowsFormsApp
             request.ServicePoint.ConnectionLimit = 100;
             request.ServicePoint.ConnectionLeaseTimeout = 5000;
 
+            // 兜底定时器：强制覆盖 DNS / TCP 连接阶段，确保总超时 ≤ TimeOut
+            Timer abortTimer = null;
+            if (TimeOut > 0)
+            {
+                abortTimer = new Timer(_ =>
+                {
+                    try { request.Abort(); }
+                    catch { }
+                }, null, TimeOut, Timeout.Infinite);
+            }
+
             try
             {
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
@@ -33,7 +45,12 @@ namespace WindowsFormsApp
             }
             finally
             {
-                request.Abort();
+                if (abortTimer != null)
+                {
+                    abortTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                    abortTimer.Dispose();
+                }
+                try { request.Abort(); } catch { }
             }
         }
         public string Post(string Url, string Data, string Referer)

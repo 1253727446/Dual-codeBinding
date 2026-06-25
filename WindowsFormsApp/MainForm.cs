@@ -670,8 +670,13 @@ namespace WindowsFormsApp
         private void MarkFail()
         {
             _failCount++;
-            FailCount.Text = _failCount.ToString();
             SaveCounters();
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => FailCount.Text = _failCount.ToString()));
+                return;
+            }
+            FailCount.Text = _failCount.ToString();
         }
 
         /// <summary>
@@ -758,7 +763,7 @@ namespace WindowsFormsApp
             if (!ValidateSFC(sfcValue, SFCRule))
             {
                 AddLogMessage($"SFC规则校验失败：SFC = {sfcValue} 不符合规则 {SFCRule}", Color.Red);
-                SFC_UITextBox.Text = "";
+                this.BeginInvoke(new Action(() => SFC_UITextBox.Text = ""));
                 MarkFail();
                 return false;
             }
@@ -820,8 +825,15 @@ namespace WindowsFormsApp
             Task.Run(() => PlcWrite(mesresult, 27)); AddLogMessage($"上位机写 [{mesresult}] = 27", Color.Green);
             AddLogMessage("Complete成功", Color.Green);
             _passCount++;
-            PassCount.Text = _passCount.ToString();
             SaveCounters();
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => PassCount.Text = _passCount.ToString()));
+            }
+            else
+            {
+                PassCount.Text = _passCount.ToString();
+            }
             return true;
         }
 
@@ -1368,6 +1380,7 @@ namespace WindowsFormsApp
 
             if (this.InvokeRequired)
             {
+                // UI 线程：信号验证 + UI 更新（轻量操作，不阻塞）
                 this.BeginInvoke(new Action(() =>
                 {
                     bool isScanPage = (uiTabControl1.SelectedTab == pageScan);
@@ -1404,7 +1417,9 @@ namespace WindowsFormsApp
                         }
 
                         SFC_UITextBox.Text = sfc;
-                        ruleSFC(SFC_UITextBox.Text);
+
+                        // 后台线程：MES 通信（HTTP 请求，不阻塞 UI 线程和定时器）
+                        Task.Run(() => ruleSFC(sfc));
                     }
                     else
                     {
@@ -1415,6 +1430,7 @@ namespace WindowsFormsApp
                         }
                     }
                 }));
+
             }
         }
 
