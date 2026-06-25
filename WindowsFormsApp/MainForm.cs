@@ -283,11 +283,12 @@ namespace WindowsFormsApp
             try
             {
                 string plcip = g_DicMESConfig["Setting"]["plcip"];
-                await Connect_PLC(plcip, uiLabel3);
+                await Connect_PLC(plcip, uiLabel3).ConfigureAwait(true);
             }
             catch (Exception ex)
             {
                 AddLogMessage("PLC连接异常：" + ex.Message, Color.Red);
+                WriteLogs.WriteLog("PLC连接异常: " + ex);
             }
         }
 
@@ -506,6 +507,10 @@ namespace WindowsFormsApp
                     RefreshPlcCell(2, _heartbeat);
                     SetPlcStatus(true);
                 }
+                catch (Exception ex)
+                {
+                    WriteLogs.WriteLog("PLC监控定时器异常: " + ex);
+                }
                 finally
                 {
                     Interlocked.Exchange(ref _monitorBusy, 0);
@@ -603,9 +608,10 @@ namespace WindowsFormsApp
                 AddLogMessage("PLC重连失败，已尝试5次，请重启软件", Color.Red);
                 SetPlcStatus(false);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 _plcReconnecting = false;
+                WriteLogs.WriteLog("PLC重连未预期异常: " + ex);
             }
         }
 
