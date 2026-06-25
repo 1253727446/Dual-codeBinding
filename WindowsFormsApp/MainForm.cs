@@ -1293,11 +1293,11 @@ namespace WindowsFormsApp
                 using (var client = new System.Net.Sockets.TcpClient())
                 {
                     var ar = client.BeginConnect(_scanIp, _scanPort, null, null);
-                    if (ar.AsyncWaitHandle.WaitOne(1000))
-                    {
-                        client.EndConnect(ar);
+                    bool connected = ar.AsyncWaitHandle.WaitOne(1000);
+                    // 无论成功与否都必须调用 EndConnect，否则 AsyncWaitHandle 泄漏
+                    try { client.EndConnect(ar); } catch { }
+                    if (connected && client.Connected)
                         return true;
-                    }
                 }
             }
             catch (Exception) { }
