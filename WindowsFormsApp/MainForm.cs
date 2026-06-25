@@ -454,11 +454,13 @@ namespace WindowsFormsApp
                         // 仅当 startscanswitch=true 时才监听 D3000 扫码信号、发送 start 指令、检测超时
                         if (_startScanSwitchEnabled)
                         {
-                            // 上升沿：D3000 从非 1 变为 1，就绪扫码
+                            // 上升沿：D3000 从非 1 变为 1，立即清零，就绪扫码
                             if (_prevD3000Value != 1 && d3000Val == 1)
                             {
                                 ReloadConfig();
                                 AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
+                                Task.Run(() => PlcWrite(startscan, (short)0));
+                                AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
                                 _scanArmed = true;
                                 _scanArmedTime = DateTime.Now;
                                 if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
@@ -472,17 +474,15 @@ namespace WindowsFormsApp
                                     });
                                 }
                             }
-                            // 持续为 1 且已就绪：每隔 0.5s 重发 start 指令，并检查是否超时
-                            else if (_scanArmed && d3000Val == 1)
+                            // 已就绪：检查超时 + 重发 start 指令（不依赖 D3000==1）
+                            else if (_scanArmed)
                             {
                                 if ((DateTime.Now - _scanArmedTime).TotalSeconds > timeout)
                                 {
                                     BeginInvoke(new Action(() =>
                                     {
-                                        AddLogMessage($"扫码超时：{startscan}=1 超过 {timeout}秒 未收到扫码数据", Color.Red);
+                                        AddLogMessage($"扫码超时：超过 {timeout}秒 未收到扫码数据", Color.Red);
                                         Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
-                                        Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
-                                        AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
                                         MarkFail();
                                     }));
                                     _scanArmed = false;
@@ -497,15 +497,6 @@ namespace WindowsFormsApp
                                         catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
                                     });
                                 }
-                            }
-                            // D3000 变为非 1：复位就绪状态
-                            else if (d3000Val != 1)
-                            {
-                                if (_scanArmed)
-                                {
-                                    BeginInvoke(new Action(() => AddLogMessage($"扫码信号丢失：{startscan} 从 1 变为 {d3000Val}，复位就绪状态", Color.Orange)));
-                                }
-                                _scanArmed = false;
                             }
                             _prevD3000Value = d3000Val;
                         }
@@ -1227,7 +1218,7 @@ namespace WindowsFormsApp
             string fe = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "]: ";
             this.uiRichTextBox1.SelectionColor = useColor;
             this.uiRichTextBox1.AppendText(fe + message + "\r\n");
-            WriteLogs.WriteLog(fe + message);
+            WriteLogs.WriteLog(message);
         }
 
         // ============================================================
