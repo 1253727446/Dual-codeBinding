@@ -1399,18 +1399,14 @@ namespace WindowsFormsApp
                             {
                                 AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
                                 Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
-                                Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
-                                AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
                                 _scanArmed = false;
                                 SFC_UITextBox.Text = "";
                                 MarkFail();
                                 return;
                             }
 
-                            // 就绪且未超时 → 消费扫码信号，写回 D3000=0 等待下次触发
+                            // 就绪且未超时 → 消费扫码信号（D3000 已在上升沿清零）
                             _scanArmed = false;
-                            Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
-                            AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
                         }
 
                         SFC_UITextBox.Text = sfc;
