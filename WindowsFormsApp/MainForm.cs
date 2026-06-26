@@ -461,7 +461,7 @@ namespace WindowsFormsApp
                                 ReloadConfig();
                                 AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
                                 Task.Run(() => PlcWrite(startscan, (short)0));
-                                AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
+                                AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
                                 _scanArmed = true;
                                 _scanArmedTime = DateTime.Now;
                                 if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
@@ -483,7 +483,7 @@ namespace WindowsFormsApp
                                     BeginInvoke(new Action(() =>
                                     {
                                         AddLogMessage($"扫码超时：超过 {timeout}秒 未收到扫码数据", Color.Red);
-                                        Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
+                                        Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
                                         MarkFail();
                                     }));
                                     _scanArmed = false;
@@ -1398,8 +1398,8 @@ namespace WindowsFormsApp
                             if (elapsed > timeout)
                             {
                                 AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
-                                Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"PLC写 [{mesresult}] = 13", Color.Green);
-                                Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
+                                Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
+                                Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
                                 AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
                                 _scanArmed = false;
                                 SFC_UITextBox.Text = "";
@@ -1409,7 +1409,7 @@ namespace WindowsFormsApp
 
                             // 就绪且未超时 → 消费扫码信号，写回 D3000=0 等待下次触发
                             _scanArmed = false;
-                            Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"PLC写 [{startscan}] = 0", Color.Green);
+                            Task.Run(() => PlcWrite(startscan, (short)0)); AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
                             AddLogMessage($"{startscan} 已重置为 0", Color.Blue);
                         }
 
