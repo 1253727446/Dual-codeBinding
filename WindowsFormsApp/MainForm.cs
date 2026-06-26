@@ -1230,6 +1230,7 @@ namespace WindowsFormsApp
             string fe = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "]: ";
             this.uiRichTextBox1.SelectionColor = useColor;
             this.uiRichTextBox1.AppendText(fe + message + "\r\n");
+            this.uiRichTextBox1.ScrollToCaret();
             WriteLogs.WriteLog(message);
         }
 
@@ -1386,48 +1387,36 @@ namespace WindowsFormsApp
                 // UI 线程：信号验证 + UI 更新（轻量操作，不阻塞）
                 this.BeginInvoke(new Action(() =>
                 {
-                    bool isScanPage = (uiTabControl1.SelectedTab == pageScan);
-                    if (isScanPage)
+                    if (_startScanSwitchEnabled)
                     {
-                        if (_startScanSwitchEnabled)
+                        // 校验扫码信号 D3000 是否就绪
+                        if (!_scanArmed)
                         {
-                            // 扫码过站页：校验扫码信号 D3000 是否就绪
-                            if (!_scanArmed)
-                            {
-                                AddLogMessage("扫码信号未就绪（D3000≠1），忽略本次扫码", Color.Red);
-                                SFC_UITextBox.Text = "";
-                                return;
-                            }
+                            AddLogMessage("扫码信号未就绪（D3000≠1），忽略本次扫码", Color.Red);
+                            SFC_UITextBox.Text = "";
+                            return;
+                        }
 
-                            // 超时校验：D3000=1 后是否超过 timeout 才收到扫码
-                            double elapsed = (DateTime.Now - _scanArmedTime).TotalSeconds;
-                            if (elapsed > timeout)
-                            {
-                                AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
-                                Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
-                                _scanArmed = false;
-                                SFC_UITextBox.Text = "";
-                                MarkFail();
-                                return;
-                            }
-
-                            // 就绪且未超时 → 消费扫码信号（D3000 已在上升沿清零）
+                        // 超时校验：D3000=1 后是否超过 timeout 才收到扫码
+                        double elapsed = (DateTime.Now - _scanArmedTime).TotalSeconds;
+                        if (elapsed > timeout)
+                        {
+                            AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
+                            Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
                             _scanArmed = false;
+                            SFC_UITextBox.Text = "";
+                            MarkFail();
+                            return;
                         }
 
-                        SFC_UITextBox.Text = sfc;
+                        // 就绪且未超时 → 消费扫码信号（D3000 已在上升沿清零）
+                        _scanArmed = false;
+                    }
 
-                        // 后台线程：MES 通信（HTTP 请求，不阻塞 UI 线程和定时器）
-                        Task.Run(() => ruleSFC(sfc));
-                    }
-                    else
-                    {
-                        // 小件上料页：填入小件码输入框
-                        if (txtInputCode != null && !txtInputCode.IsDisposed)
-                        {
-                            txtInputCode.Text = sfc;
-                        }
-                    }
+                    SFC_UITextBox.Text = sfc;
+
+                    // 后台线程：MES 通信（HTTP 请求，不阻塞 UI 线程和定时器）
+                    Task.Run(() => ruleSFC(sfc));
                 }));
 
             }
