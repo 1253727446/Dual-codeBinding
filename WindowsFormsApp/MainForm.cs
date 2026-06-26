@@ -74,10 +74,6 @@ namespace WindowsFormsApp
         private CancellationTokenSource _cts;
         /// <summary>扫码枪当前是否已连接（避免依赖 UI 标签判断状态）</summary>
         private bool _scanConnected;
-        /// <summary>扫码枪上次真实活动时间（连接成功 / 收到数据），用于检测僵尸连接</summary>
-        private DateTime _lastScanActivity = DateTime.MinValue;
-        /// <summary>扫码枪连接空闲超过此时长（小时）则主动重连，防止 NAT 超时导致僵尸连接</summary>
-        private const int ScanIdleReconnectHours = 4;
         /// <summary>扫码枪 IP（缓存，避免反复查字典）</summary>
         private string _scanIp;
         /// <summary>扫码枪端口（缓存）</summary>
@@ -464,15 +460,6 @@ namespace WindowsFormsApp
                             {
                                 ReloadConfig();
                                 AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
-
-                                // 扫码枪连接空闲超过阈值 → 主动重连，防止 TCP 僵尸连接
-                                if (_scanConnected && _lastScanActivity != DateTime.MinValue
-                                    && (DateTime.Now - _lastScanActivity).TotalHours > ScanIdleReconnectHours)
-                                {
-                                    AddLogMessage($"扫码枪连接空闲超过{ScanIdleReconnectHours}小时，主动重连...", Color.Orange);
-                                    Task.Run(() => ReconnectScanner());
-                                }
-
                                 _scanArmed = true;
                                 _scanArmedTime = DateTime.Now;
 
@@ -1268,7 +1255,6 @@ namespace WindowsFormsApp
             {
                 scanclient.Connect(_scanIp, _scanPort);
                 _scanConnected = true;
-                _lastScanActivity = DateTime.Now;
                 uiLabel.Text = "已连接";
                 uiLabel.BackColor = Color.DodgerBlue;
                 AddLogMessage("扫码枪连接成功", Color.Green);
@@ -1430,7 +1416,6 @@ namespace WindowsFormsApp
                         }
 
                         SFC_UITextBox.Text = sfc;
-                        _lastScanActivity = DateTime.Now;
 
                         // 后台线程：MES 通信（HTTP 请求，不阻塞 UI 线程和定时器）
                         Task.Run(() => ruleSFC(sfc));
