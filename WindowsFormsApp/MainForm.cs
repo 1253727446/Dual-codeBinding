@@ -1,4 +1,4 @@
-using HslCommunication;
+﻿using HslCommunication;
 using HslCommunication.Profinet.Omron;
 using Newtonsoft.Json;
 
@@ -112,6 +112,9 @@ namespace WindowsFormsApp
         private DateTime _scanArmedTime;
         /// <summary>上一次 D3000 的值，用于检测上升沿</summary>
         private short _prevD3000Value;
+        private readonly object _scanCycleLock = new object();
+        private bool _scanCycleActive;
+        private CancellationTokenSource _scanTimeoutCts;
 
         // ========== PLC 通讯助手方法 ==========
         /// <summary>当前 PLC 是否已连接（由本类自行维护状态）</summary>
@@ -455,54 +458,32 @@ namespace WindowsFormsApp
                         // 仅当 startscanswitch=true 时才监听 D3000 扫码信号、发送 start 指令、检测超时
                         if (_startScanSwitchEnabled)
                         {
-                            // 上升沿：D3000 从非 1 变为 1，立即清零，就绪扫码
-                            if (_prevD3000Value != 1 && d3000Val == 1)
+                            if (d3000Val == 1)
                             {
-                                ReloadConfig();
-                                AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
-                                _scanArmed = true;
-                                _scanArmedTime = DateTime.Now;
+                                bool isRisingEdge = _prevD3000Value != 1;
+                                bool started = false;
 
-                                // 先发 start 给扫码枪，再清 D3000，保证扫码枪先收到指令
-                                if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
+                                if (isRisingEdge)
                                 {
-                                    var order = _startOrder;
-                                    var client = scanclient;
-                                    Task.Run(() =>
+                                    ReloadConfig();
+                                    started = BeginScanCycle();
+                                    if (started)
                                     {
-                                        try { client?.Write(order); }
-                                        catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
-                                        PlcWrite(startscan, (short)0);
-                                    });
+                                        AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
+                                    }
+                                    else
+                                    {
+                                        AddLogMessage("扫码周期未结束，忽略重复D3000=1", Color.Orange);
+                                    }
                                 }
-                                else
-                                {
-                                    Task.Run(() => PlcWrite(startscan, (short)0));
-                                }
+
+                                Task.Run(() => PlcWrite(startscan, (short)0));
                                 BeginInvoke(new Action(() => AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green)));
-                            }
-                            // 已就绪：检查超时 + 重发 start 指令（不依赖 D3000==1）
-                            else if (_scanArmed)
-                            {
-                                if ((DateTime.Now - _scanArmedTime).TotalSeconds > timeout)
-                                {
-                                    BeginInvoke(new Action(() =>
-                                    {
-                                        AddLogMessage($"扫码超时：超过 {timeout}秒 未收到扫码数据", Color.Red);
-                                        Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
-                                        MarkFail();
-                                    }));
-                                    _scanArmed = false;
-                                }
-                                else if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
+
+                                if (started && _scanConnected && !string.IsNullOrEmpty(_startOrder))
                                 {
                                     var order = _startOrder;
-                                    var client = scanclient;
-                                    Task.Run(() =>
-                                    {
-                                        try { client?.Write(order); }
-                                        catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
-                                    });
+                                    Task.Run(() => SendScannerStartOrder(order));
                                 }
                             }
                             _prevD3000Value = d3000Val;
@@ -732,6 +713,8 @@ namespace WindowsFormsApp
         {
             try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
             try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
+            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
+            try { _scanTimeoutCts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
             _plcMonitorTimer?.Stop();
@@ -1280,13 +1263,11 @@ namespace WindowsFormsApp
             {
                 if (_scanReconnecting) return;
 
+                if (_scanConnected)
+                    return;
+
                 bool reachable = ProbeScanner();
-                if (_scanConnected && !reachable)
-                {
-                    AddLogMessage("检测到扫码枪已断开", Color.Red);
-                    SetScanStatus(false);
-                }
-                else if (!_scanConnected && reachable)
+                if (reachable)
                 {
                     AddLogMessage("检测到扫码枪端口可达，开始重连");
                     _ = ReconnectScanner();
@@ -1299,6 +1280,102 @@ namespace WindowsFormsApp
         /// 用短超时 TcpClient 探测扫码枪端口是否可达，
         /// 使用独立连接，不干扰 SimpleTCP 主连接
         /// </summary>
+        private bool BeginScanCycle()
+        {
+            lock (_scanCycleLock)
+            {
+                if (_scanCycleActive)
+                    return false;
+
+                _scanCycleActive = true;
+                _scanArmed = true;
+                _scanArmedTime = DateTime.Now;
+            }
+
+            StartScanTimeoutWatch();
+            return true;
+        }
+
+        private bool TryConsumeScanCycle()
+        {
+            lock (_scanCycleLock)
+            {
+                if (!_scanCycleActive)
+                    return false;
+
+                _scanCycleActive = false;
+                _scanArmed = false;
+            }
+
+            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
+            return true;
+        }
+
+        private void StartScanTimeoutWatch()
+        {
+            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
+            try { _scanTimeoutCts?.Dispose(); } catch (ObjectDisposedException) { }
+
+            _scanTimeoutCts = new CancellationTokenSource();
+            var token = _scanTimeoutCts.Token;
+            double waitSeconds = timeout > 0 ? timeout : 2.0;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(waitSeconds), token);
+
+                    lock (_scanCycleLock)
+                    {
+                        if (!_scanCycleActive)
+                            return;
+
+                        _scanCycleActive = false;
+                        _scanArmed = false;
+                    }
+
+                    var writeResult = PlcWrite(mesresult, 13);
+                    BeginInvoke(new Action(() =>
+                    {
+                        AddLogMessage($"扫码超时：超过 {waitSeconds:F1}秒 未收到扫码数据", Color.Red);
+                        AddLogMessage($"上位机写 [{mesresult}] = 13" + (writeResult.IsSuccess ? "" : " 失败：" + writeResult.Message), writeResult.IsSuccess ? Color.Green : Color.Red);
+                        MarkFail();
+                    }));
+                }
+                catch (TaskCanceledException) { }
+                catch (ObjectDisposedException) { }
+                catch (Exception ex)
+                {
+                    WriteLogs.WriteLog("扫码超时任务异常: " + ex);
+                }
+            });
+        }
+
+        private bool SendScannerStartOrder(string order)
+        {
+            try
+            {
+                var client = scanclient;
+                if (client == null)
+                    throw new InvalidOperationException("扫码枪客户端未初始化");
+
+                client.Write(order);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    AddLogMessage("发送startorder失败：" + ex.Message, Color.Red);
+                    SetScanStatus(false);
+                }));
+                if (!_scanReconnecting)
+                    _ = ReconnectScanner();
+                return false;
+            }
+        }
+
         private bool ProbeScanner()
         {
             try
@@ -1389,28 +1466,12 @@ namespace WindowsFormsApp
                 {
                     if (_startScanSwitchEnabled)
                     {
-                        // 校验扫码信号 D3000 是否就绪
-                        if (!_scanArmed)
+                        if (!TryConsumeScanCycle())
                         {
-                            AddLogMessage("扫码信号未就绪（D3000≠1），忽略本次扫码", Color.Red);
+                            AddLogMessage("未处于扫码周期，忽略本次扫码", Color.Red);
                             SFC_UITextBox.Text = "";
                             return;
                         }
-
-                        // 超时校验：D3000=1 后是否超过 timeout 才收到扫码
-                        double elapsed = (DateTime.Now - _scanArmedTime).TotalSeconds;
-                        if (elapsed > timeout)
-                        {
-                            AddLogMessage($"扫码超时：{startscan}=1 后 {elapsed:F1}秒 才收到数据（阈值 {timeout}秒）", Color.Red);
-                            Task.Run(() => PlcWrite(mesresult, 13)); AddLogMessage($"上位机写 [{mesresult}] = 13", Color.Green);
-                            _scanArmed = false;
-                            SFC_UITextBox.Text = "";
-                            MarkFail();
-                            return;
-                        }
-
-                        // 就绪且未超时 → 消费扫码信号（D3000 已在上升沿清零）
-                        _scanArmed = false;
                     }
 
                     SFC_UITextBox.Text = sfc;
