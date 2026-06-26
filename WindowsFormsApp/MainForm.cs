@@ -464,8 +464,6 @@ namespace WindowsFormsApp
                             {
                                 ReloadConfig();
                                 AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
-                                Task.Run(() => PlcWrite(startscan, (short)0));
-                                AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green);
 
                                 // 扫码枪连接空闲超过阈值 → 主动重连，防止 TCP 僵尸连接
                                 if (_scanConnected && _lastScanActivity != DateTime.MinValue
@@ -477,6 +475,8 @@ namespace WindowsFormsApp
 
                                 _scanArmed = true;
                                 _scanArmedTime = DateTime.Now;
+
+                                // 先发 start 给扫码枪，再清 D3000，保证扫码枪先收到指令
                                 if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
                                 {
                                     var order = _startOrder;
@@ -485,8 +485,14 @@ namespace WindowsFormsApp
                                     {
                                         try { client?.Write(order); }
                                         catch (Exception ex) { BeginInvoke(new Action(() => AddLogMessage("发送startorder失败：" + ex.Message, Color.Red))); }
+                                        PlcWrite(startscan, (short)0);
                                     });
                                 }
+                                else
+                                {
+                                    Task.Run(() => PlcWrite(startscan, (short)0));
+                                }
+                                BeginInvoke(new Action(() => AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green)));
                             }
                             // 已就绪：检查超时 + 重发 start 指令（不依赖 D3000==1）
                             else if (_scanArmed)
