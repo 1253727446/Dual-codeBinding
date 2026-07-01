@@ -1324,8 +1324,31 @@ namespace WindowsFormsApp
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(waitSeconds), token);
+                    double elapsed = 0;
+                    const double retryInterval = 0.5;
 
+                    while (elapsed < waitSeconds)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(retryInterval), token);
+                        elapsed += retryInterval;
+
+                        bool cycleActive;
+                        lock (_scanCycleLock)
+                        {
+                            cycleActive = _scanCycleActive;
+                        }
+
+                        if (!cycleActive)
+                            return; // 扫码数据已收到，正常退出
+
+                        // 重发 start 指令
+                        if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
+                        {
+                            SendScannerStartOrder(_startOrder);
+                        }
+                    }
+
+                    // 超时：扫码周期仍未结束
                     lock (_scanCycleLock)
                     {
                         if (!_scanCycleActive)
