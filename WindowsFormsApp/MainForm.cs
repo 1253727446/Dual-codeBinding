@@ -1864,10 +1864,8 @@ namespace WindowsFormsApp
 
                 if (!result.Found)
                 {
-                    // LoadUps 为空 → 告警并写 D3056=1
+                    // LoadUps 为空 → 仅告警，不写 PLC
                     AddLogMessage($"[{bydpn}] 位置 {location} 小件数量不足，请及时上料！", Color.Red);
-                    Task.Run(() => PlcWrite("D3056", (short)1));
-                    BeginInvoke(new Action(() => AddLogMessage("上位机写 [D3056] = 1", Color.Green)));
                     continue;
                 }
 
@@ -2392,7 +2390,6 @@ namespace WindowsFormsApp
             if (!result.Found)
             {
                 AddLogMessage($"[{bydpn}] 位置 {location} 获取最新数量为空，小件数量不足，请及时上料！", Color.Red);
-                Task.Run(() => PlcWrite("D3056", (short)1));
                 return;
             }
 
