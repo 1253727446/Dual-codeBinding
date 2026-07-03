@@ -26,6 +26,10 @@ namespace WindowsFormsApp
         private const string ColumnRemaining = "Remaining";
         private const string ColumnQty = "Qty";
         private const string ColumnDidRule = "DidRule";
+        private const string ColumnLocation = "Location";
+        private const string ColumnMinSurplus = "MinSurplus";
+        private const string ColumnStopQty = "StopQty";
+        private const string ColumnClientNo = "ClientNo";
 
         // ========== 小件数据相关字段 ==========
         /// <summary>承载表格数据的 DataTable，直接绑定到 DataGridView</summary>
@@ -1535,7 +1539,11 @@ namespace WindowsFormsApp
                             item.Remarks,     // 总数（静态，不扣减）
                             item.Remarks,     // 剩余数量（动态，会扣减）
                             item.Qty,         // 每产品用量（每次扣减数）
-                            item.DidRule      // 条码匹配规则
+                            item.DidRule,     // 条码匹配规则
+                            item.Location,    // 小件位置号
+                            item.MinSurplus,  // 最小剩余数量
+                            item.StopQty,     // 停机数量
+                            item.ClientNo     // 料号
                         );
                     }
                     AddLogMessage("GetLoadSubsByLoadId获取小件信息成功",Color.Green);
@@ -1581,6 +1589,10 @@ namespace WindowsFormsApp
             AddColumnIfMissing(ColumnRemaining, typeof(double));
             AddColumnIfMissing(ColumnQty, typeof(double));
             AddColumnIfMissing(ColumnDidRule, typeof(string));
+            AddColumnIfMissing(ColumnLocation, typeof(string));
+            AddColumnIfMissing(ColumnMinSurplus, typeof(int));
+            AddColumnIfMissing(ColumnStopQty, typeof(string));
+            AddColumnIfMissing(ColumnClientNo, typeof(string));
         }
 
         /// <summary>
@@ -1620,6 +1632,10 @@ namespace WindowsFormsApp
             _partsTable.Columns.Add(ColumnRemaining, typeof(double));
             _partsTable.Columns.Add(ColumnQty, typeof(double));
             _partsTable.Columns.Add(ColumnDidRule, typeof(string));
+            _partsTable.Columns.Add(ColumnLocation, typeof(string));
+            _partsTable.Columns.Add(ColumnMinSurplus, typeof(int));
+            _partsTable.Columns.Add(ColumnStopQty, typeof(string));
+            _partsTable.Columns.Add(ColumnClientNo, typeof(string));
         }
 
         /// <summary>
@@ -1644,6 +1660,10 @@ namespace WindowsFormsApp
             dataGridViewParts.Columns[ColumnRemaining].HeaderText = "剩余数量";
             dataGridViewParts.Columns[ColumnQty].HeaderText = "每次扣的数量";
             dataGridViewParts.Columns[ColumnDidRule].HeaderText = "规则";
+            dataGridViewParts.Columns[ColumnLocation].HeaderText = "位置号";
+            dataGridViewParts.Columns[ColumnMinSurplus].HeaderText = "最小剩余";
+            dataGridViewParts.Columns[ColumnStopQty].HeaderText = "停机数量";
+            dataGridViewParts.Columns[ColumnClientNo].HeaderText = "料号";
 
             // 添加操作按钮列（重置单条绑定）
             if (!dataGridViewParts.Columns.Contains("btnResetRow"))

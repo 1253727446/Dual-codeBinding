@@ -261,7 +261,11 @@ namespace WindowsFormsApp
                             DidRule = item.didRule?.ToString(),
                             Remarks = item.remarks?.ToString(),
                             Qty = !string.IsNullOrEmpty(item.qty) ? Convert.ToDouble(item.qty) : 0.0,
-                            Did = ""
+                            Did = "",
+                            Location = item.location?.ToString(),
+                            MinSurplus = item.minSurplus != null ? Convert.ToInt32(item.minSurplus) : 0,
+                            StopQty = item.stopQty?.ToString(),
+                            ClientNo = item.clientNo?.ToString()
                         });
                     }
                 }

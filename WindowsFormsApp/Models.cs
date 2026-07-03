@@ -12,6 +12,10 @@ namespace WindowsFormsApp
         public string DidRule { get; set; }    // 条码匹配规则（分号分隔）
         public double Qty { get; set; }        // 每产品用量
         public string Remarks { get; set; }    // 默认上料数量（初始剩余数量）
+        public string Location { get; set; }   // 小件位置号
+        public int MinSurplus { get; set; }    // 最小剩余数量
+        public string StopQty { get; set; }    // 停机数量
+        public string ClientNo { get; set; }   // 料号
     }
     /// <summary>
     /// TestDataCollect2MainChild 接口中 TEST_DATA_LIST 的单项
