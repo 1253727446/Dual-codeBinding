@@ -2271,7 +2271,30 @@ namespace WindowsFormsApp
                 return;
             }
 
-            // 未绑定的新行 → 直接绑定
+            // 未绑定的新行 → 先调 LoadMaterialUp 上料，再绑定
+            string location = Convert.ToString(targetRow[ColumnLocation]) ?? "";
+            string bydpn = Convert.ToString(targetRow[ColumnBydpn]) ?? "";
+            string remarks = Convert.ToString(targetRow[ColumnRemarks]) ?? "0";
+            string station = g_DicMESConfig["Config"]["Operation"];
+            string shoporder = g_DicMESConfig["Config"]["Resource"];
+            string line = g_DicMESConfig["Config"]["Line"];
+            string loadId = g_DicMESConfig["Config"]["Load_ID"];
+            string dateCode = g_DicMESConfig["Config"]["LoginID"];
+
+            string loadUpMsg;
+            bool loadUpOk = FormHelper.LoadMaterialUp(
+                _mesUrl, _loginId, _clientId, loadId, location, bydpn, station,
+                line, shoporder, inputCode, remarks, dateCode, out loadUpMsg);
+
+            if (!loadUpOk)
+            {
+                AddLogMessage($"LoadMaterialUp 失败：{loadUpMsg}", Color.Red);
+                MessageBox.Show($"上料失败：{loadUpMsg}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                SetStatus("上料失败，请重试。");
+                return;
+            }
+            AddLogMessage($"LoadMaterialUp 成功：小件码 [{inputCode}] 已上到 {bydpn}（{location}）", Color.Green);
+
             targetRow[ColumnDid] = inputCode;
             SaveTable();
             dataGridViewParts.Refresh();
