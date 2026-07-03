@@ -2296,6 +2296,7 @@ namespace WindowsFormsApp
             AddLogMessage($"LoadMaterialUp 成功：小件码 [{inputCode}] 已上到 {bydpn}（{location}）", Color.Green);
 
             targetRow[ColumnDid] = inputCode;
+            RefreshQtyAfterLoadUp(targetRow);  // 上料后获取最新剩余数量
             SaveTable();
             dataGridViewParts.Refresh();
 
@@ -2361,11 +2362,51 @@ namespace WindowsFormsApp
 
             // 3. 更新本地行
             row[ColumnDid] = newDid;
-            row[ColumnRemaining] = Convert.ToDouble(remarks);
+            RefreshQtyAfterLoadUp(row);  // 上料后获取最新剩余数量
             SaveTable();
             dataGridViewParts.Refresh();
 
-            SetStatus($"上新小件成功：{bydpn} [{oldDid}] → [{newDid}]，剩余数量重置为 {remarks}");
+            SetStatus($"上新小件成功：{bydpn} [{oldDid}] → [{newDid}]");
+        }
+
+        /// <summary>
+        /// 上料后调 GetLoadUpByParams 获取最新剩余数量，更新本地并检查告警
+        /// </summary>
+        private void RefreshQtyAfterLoadUp(DataRow row)
+        {
+            string location = Convert.ToString(row[ColumnLocation]) ?? "";
+            string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
+            int stopQty;
+            int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
+
+            if (string.IsNullOrWhiteSpace(location)) return;
+
+            string shoporder = g_DicMESConfig["Config"]["Resource"];
+            string line = g_DicMESConfig["Config"]["Line"];
+
+            var result = FormHelper.GetLoadUpByParams(
+                _mesUrl, _loginId, _clientId, shoporder, location, line);
+
+            if (!result.Ok || !string.IsNullOrEmpty(result.FailMessage)) return;
+
+            if (!result.Found)
+            {
+                AddLogMessage($"[{bydpn}] 位置 {location} 获取最新数量为空，小件数量不足，请及时上料！", Color.Red);
+                Task.Run(() => PlcWrite("D3056", (short)1));
+                return;
+            }
+
+            row[ColumnRemaining] = result.QtyResidual;
+
+            if (result.QtyResidual <= stopQty)
+            {
+                AddLogMessage($"[{bydpn}] 位置 {location} 上料后剩余 {result.QtyResidual} ≤ 停机数量 {stopQty}，小件数量不足，请及时上料！", Color.Red);
+                Task.Run(() => PlcWrite("D3056", (short)1));
+            }
+            else
+            {
+                AddLogMessage($"[{bydpn}] 位置 {location} 上料后剩余数量：{result.QtyResidual}", Color.Green);
+            }
         }
 
         private void cmbMatches_SelectedIndexChanged(object sender, EventArgs e)
