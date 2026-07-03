@@ -1313,10 +1313,18 @@ namespace WindowsFormsApp
             {
                 if (_scanReconnecting) return;
 
-                if (_scanConnected)
-                    return;
-
                 bool reachable = ProbeScanner();
+                if (_scanConnected)
+                {
+                    // 已连接但端口不可达 → 标记断开，下次 tick 自动重连
+                    if (!reachable)
+                    {
+                        SetScanStatus(false);
+                        AddLogMessage("扫码枪连接已断开", Color.Orange);
+                    }
+                    return;
+                }
+
                 if (reachable)
                 {
                     AddLogMessage("检测到扫码枪端口可达，开始重连");
@@ -1632,7 +1640,7 @@ namespace WindowsFormsApp
                 if (File.Exists(_xmlPath))
                 {
                     // 加载本地 XML 到临时表
-                    var localTable = new DataTable("PartsLocal");
+                    var localTable = new DataTable("Parts");
                     try { localTable.ReadXml(_xmlPath); }
                     catch (Exception ex)
                     {
