@@ -31,18 +31,28 @@ namespace WindowsFormsApp
     }
 
     /// <summary>
+    /// GetLoadUpByParams 接口返回结果
+    /// </summary>
+    public class LoadUpResult
+    {
+        /// <summary>调用是否成功（网络+解析）</summary>
+        public bool Ok { get; set; }
+        /// <summary>RESULT=FAIL 时的错误消息，非空表示应停止流程</summary>
+        public string FailMessage { get; set; }
+        /// <summary>最新剩余数量</summary>
+        public double QtyResidual { get; set; }
+        /// <summary>LoadUps 数组是否有数据</summary>
+        public bool Found { get; set; }
+    }
+
+    /// <summary>
     /// 用来给下拉框展示”哪些行可以和当前输入的小件码匹配”。
     /// </summary>
     public class MatchCandidate
     {
-        /// <summary>
-        /// DataTable 里对应的行索引，后续真正绑定时就靠它定位。
-        /// </summary>
         public int RowIndex { get; set; }
-
-        /// <summary>
-        /// 下拉框展示给用户看的文字。
-        /// </summary>
         public string DisplayText { get; set; }
+        /// <summary>该行是否已绑定 Did（已绑定时选中需要走"上新小件"流程）</summary>
+        public bool IsBound { get; set; }
     }
 }

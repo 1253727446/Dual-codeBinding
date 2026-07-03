@@ -796,6 +796,15 @@ namespace WindowsFormsApp
             }
             AddLogMessage("TestDataCollect2MainChild上传成功", Color.Green);
 
+            // 第五步半：Binding 扣料
+            if (!BindingDeduction(sfcValue))
+            {
+                AddLogMessage("Binding 扣料失败", Color.Red);
+                MarkFail();
+                return false;
+            }
+            AddLogMessage("Binding 扣料成功", Color.Green);
+
             // 第六步：AddSfcKey 上报 Config 绑定结果（Config=false 时跳过）
             if (!UploadConfigBinding(sfcValue))
             {
@@ -1104,7 +1113,43 @@ namespace WindowsFormsApp
                     return false;
                 }
 
-                // 接口成功后：每行剩余数量减去每次扣减数，同步本地文件
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage("TestDataCollect异常：" + ex.Message, Color.Red);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 第五步半：调用 MES Binding 接口扣料，成功后更新本地剩余数量
+        /// </summary>
+        private bool BindingDeduction(string sfcValue)
+        {
+            try
+            {
+                string shopOrder = g_DicMESConfig["Config"]["Resource"];
+                string station = g_DicMESConfig["Config"]["Operation"];
+                string loadId = g_DicMESConfig["Config"]["Load_ID"];
+                string line = g_DicMESConfig["Config"]["Line"];
+                string projectName = g_DicMESConfig["Config"]["PROJECT"];
+                string productName = g_DicMESConfig["Config"]["PRODUCT"];
+                string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
+
+                string msg;
+                bool ok = FormHelper.Binding(
+                    _mesUrl, _loginId, _clientId, sfcValue, shopOrder, station,
+                    loadId, line, projectName, productName, "1", schedulingId,
+                    "true", out msg);
+
+                if (!ok)
+                {
+                    AddLogMessage("Binding 扣料失败：" + msg, Color.Red);
+                    return false;
+                }
+
+                // 接口成功后：每行剩余数量减去每次扣减数
                 foreach (DataRow row in _partsTable.Rows)
                 {
                     double remaining = Convert.ToDouble(row[ColumnRemaining]);
@@ -1117,10 +1162,11 @@ namespace WindowsFormsApp
             }
             catch (Exception ex)
             {
-                AddLogMessage("TestDataCollect异常：" + ex.Message, Color.Red);
+                AddLogMessage("Binding 扣料异常：" + ex.Message, Color.Red);
                 return false;
             }
         }
+
         /// <summary>
         /// 第六步：调用 MES AddSfcKey 接口上报 Config 绑定结果，
         /// 仅当 setting.ini [SOFTWARE] Config=true 时执行
@@ -1556,26 +1602,292 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 从本地 XML 恢复历史数据，或首次运行时从 MES 拉取并创建
+        /// 启动时：始终先调接口获取最新小件定义，与本地 XML 比对后按规则合并
         /// </summary>
         private void LoadOrCreateTable()
         {
             _partsTable = new DataTable("Parts");
+            CreateTableSchema();
 
-            if (File.Exists(_xmlPath))
+            string StationName = g_DicMESConfig["Config"]["Operation"];
+            string loadId = g_DicMESConfig["Config"]["Load_ID"];
+
+            // 1. 尝试调接口获取最新小件定义
+            List<SubMaterialDef> apiDefs = null;
+            bool apiOk = false;
+            try
             {
-                // XML 存在 → 恢复上次数据，补齐可能缺失的列
-                _partsTable.ReadXml(_xmlPath);
-                EnsureRequiredColumns();
-                SetStatus("已从本地 XML 读取历史数据。");
+                apiDefs = FormHelper.GetLoadSubsByLoadId(_mesUrl, _loginId, _clientId, loadId, StationName);
+                apiOk = true;
+                _allSubDefs = apiDefs ?? new List<SubMaterialDef>();
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage("启动时获取小件定义失败：" + ex.Message, Color.Red);
+            }
+
+            // 2. 接口成功
+            if (apiOk && apiDefs != null)
+            {
+                if (File.Exists(_xmlPath))
+                {
+                    // 加载本地 XML 到临时表
+                    var localTable = new DataTable("PartsLocal");
+                    try { localTable.ReadXml(_xmlPath); }
+                    catch (Exception ex)
+                    {
+                        AddLogMessage("读取本地小件XML失败：" + ex.Message, Color.Red);
+                    }
+
+                    // 比对合并
+                    MergeFromApi(apiDefs, localTable);
+                }
+                else
+                {
+                    // 无本地文件 → 首次运行，直接从接口填充
+                    PopulateFromApiDefs(apiDefs);
+                    SaveTable();
+                    AddLogMessage("首次运行：已从接口获取小件数据并保存到本地。", Color.Green);
+                }
+
+                // 逐个调用 GetLoadUpByParams 更新剩余数量
+                FetchAndUpdateQtyResiduals();
                 return;
             }
 
-            // XML 不存在 → 首次运行，从 MES 拉取
-            CreateTableSchema();
-            RefreshSubDefs();
+            // 3. 接口失败 → 兜底用本地 XML
+            if (File.Exists(_xmlPath))
+            {
+                try
+                {
+                    _partsTable.ReadXml(_xmlPath);
+                    EnsureRequiredColumns();
+                    AddLogMessage("接口获取失败，使用本地缓存的小件数据。", Color.Orange);
+                }
+                catch (Exception ex)
+                {
+                    AddLogMessage("读取本地小件XML失败：" + ex.Message, Color.Red);
+                }
+            }
+            else
+            {
+                AddLogMessage("无法获取小件数据：接口不可达且无本地缓存。", Color.Red);
+                SetStatus("小件数据加载失败");
+            }
+        }
+
+        /// <summary>
+        /// 以接口返回的 apiDefs 为准，与本地 localTable 逐条比对合并：
+        /// - bydpn 相同 + DidRule/Remarks 都未变 → 保留 Did
+        /// - bydpn 相同 + DidRule/Remarks 有变化 → 清空 Did
+        /// - 仅接口有 → 新行，Did 为空
+        /// - 仅本地有 → 移除
+        /// </summary>
+        private void MergeFromApi(List<SubMaterialDef> apiDefs, DataTable localTable)
+        {
+            // 先检查是否完全一致（条目数 + bydpn + DidRule 全部相同）
+            bool fullyConsistent = true;
+            if (apiDefs.Count != localTable.Rows.Count)
+            {
+                fullyConsistent = false;
+            }
+            else
+            {
+                foreach (var def in apiDefs)
+                {
+                    var localRows = localTable.Select($"Bydpn = '{def.Bydpn.Replace("'", "''")}'");
+                    if (localRows.Length != 1)
+                    {
+                        fullyConsistent = false;
+                        break;
+                    }
+                    var localDidRule = Convert.ToString(localRows[0][ColumnDidRule]) ?? "";
+                    if (!string.Equals(def.DidRule?.Trim(), localDidRule.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        fullyConsistent = false;
+                        break;
+                    }
+                }
+            }
+
+            if (fullyConsistent)
+            {
+                // 完全一致：直接使用本地数据，不写不覆盖
+                _partsTable = localTable;
+                _partsTable.TableName = "Parts";
+                EnsureRequiredColumns();
+                AddLogMessage("小件信息一致，无需更新。", Color.Green);
+                return;
+            }
+
+            // 不一致 → 合并
+            int keptCount = 0, clearedCount = 0, addedCount = 0, removedCount = 0;
+
+            _partsTable.Rows.Clear();
+
+            foreach (var def in apiDefs)
+            {
+                var localRows = localTable.Select($"Bydpn = '{def.Bydpn.Replace("'", "''")}'");
+
+                if (localRows.Length == 1)
+                {
+                    var localRow = localRows[0];
+                    var localDidRule = Convert.ToString(localRow[ColumnDidRule]) ?? "";
+                    var localRemarks = Convert.ToDouble(localRow[ColumnRemarks]);
+                    double apiRemarks;
+                    double.TryParse(def.Remarks ?? "0", out apiRemarks);
+
+                    bool ruleSame = string.Equals(def.DidRule?.Trim(), localDidRule.Trim(), StringComparison.OrdinalIgnoreCase);
+                    bool remarksSame = Math.Abs(localRemarks - apiRemarks) < 0.001;
+
+                    if (ruleSame && remarksSame)
+                    {
+                        // 保留本地行（含 Did 绑定），但更新可能变化的字段
+                        var did = Convert.ToString(localRow[ColumnDid]) ?? "";
+                        double remaining = Convert.ToDouble(localRow[ColumnRemaining]);
+                        _partsTable.Rows.Add(
+                            def.Bydpn, did, def.Remarks, remaining, def.Qty,
+                            def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
+                        keptCount++;
+                    }
+                    else
+                    {
+                        // 规则或数量变了 → 清空 Did
+                        string reason = "";
+                        if (!ruleSame) reason += "规则变更";
+                        if (!remarksSame) reason += (reason.Length > 0 ? "、" : "") + "数量变更";
+                        AddLogMessage($"[{def.Bydpn}] {reason}，已清空绑定的小件码。", Color.Orange);
+                        _partsTable.Rows.Add(
+                            def.Bydpn, "", def.Remarks, def.Remarks, def.Qty,
+                            def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
+                        clearedCount++;
+                    }
+                }
+                else
+                {
+                    // 接口新增的小件
+                    _partsTable.Rows.Add(
+                        def.Bydpn, "", def.Remarks, def.Remarks, def.Qty,
+                        def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
+                    AddLogMessage($"[{def.Bydpn}] 接口新增小件，需重新绑定。", Color.Blue);
+                    addedCount++;
+                }
+            }
+
+            // 统计被删除的（本地有、接口无）
+            foreach (DataRow localRow in localTable.Rows)
+            {
+                var localBydpn = Convert.ToString(localRow[ColumnBydpn]) ?? "";
+                if (!apiDefs.Any(d => string.Equals(d.Bydpn, localBydpn, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var did = Convert.ToString(localRow[ColumnDid]) ?? "";
+                    AddLogMessage($"[{localBydpn}] 接口已删除此小件" + (string.IsNullOrWhiteSpace(did) ? "" : $"，绑定码 {did} 已失效") + "。", Color.Orange);
+                    removedCount++;
+                }
+            }
+
             SaveTable();
-            SetStatus("首次运行：已创建示例表格并保存到本地 XML。");
+            AddLogMessage($"小件合并完成：保留 {keptCount} | 规则/数量变更清空 {clearedCount} | 新增 {addedCount} | 删除 {removedCount}", Color.Green);
+        }
+
+        /// <summary>
+        /// 从接口定义列表直接填充 _partsTable（不比对本地）
+        /// </summary>
+        private void PopulateFromApiDefs(List<SubMaterialDef> defs)
+        {
+            _partsTable.Rows.Clear();
+            foreach (var item in defs)
+            {
+                _partsTable.Rows.Add(
+                    item.Bydpn,
+                    item.Did,
+                    item.Remarks,
+                    item.Remarks,
+                    item.Qty,
+                    item.DidRule,
+                    item.Location,
+                    item.MinSurplus,
+                    item.StopQty,
+                    item.ClientNo
+                );
+            }
+        }
+
+        /// <summary>
+        /// 逐个调用 GetLoadUpByParams 获取每个小件的最新剩余数量，
+        /// 覆盖本地剩余数量，并在数量不足时告警
+        /// </summary>
+        private void FetchAndUpdateQtyResiduals()
+        {
+            string shoporder = g_DicMESConfig["Config"]["Resource"];
+            string line = g_DicMESConfig["Config"]["Line"];
+            bool stopped = false;
+            int updatedCount = 0;
+
+            foreach (DataRow row in _partsTable.Rows)
+            {
+                string location = Convert.ToString(row[ColumnLocation]) ?? "";
+                string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
+                int stopQty;
+                int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
+
+                if (string.IsNullOrWhiteSpace(location))
+                {
+                    AddLogMessage($"[{bydpn}] 位置号为空，跳过获取剩余数量。", Color.Orange);
+                    continue;
+                }
+
+                var result = FormHelper.GetLoadUpByParams(
+                    _mesUrl, _loginId, _clientId, shoporder, location, line);
+
+                if (!result.Ok)
+                {
+                    AddLogMessage($"[{bydpn}] GetLoadUpByParams 网络异常，跳过。", Color.Orange);
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(result.FailMessage))
+                {
+                    // RESULT=FAIL → 立即停止
+                    AddLogMessage($"接口返回失败：{result.FailMessage}", Color.Red);
+                    stopped = true;
+                    break;
+                }
+
+                if (!result.Found)
+                {
+                    // LoadUps 为空 → 告警并写 D3056=1
+                    AddLogMessage($"[{bydpn}] 位置 {location} 小件数量不足，请及时上料！", Color.Red);
+                    Task.Run(() => PlcWrite("D3056", (short)1));
+                    BeginInvoke(new Action(() => AddLogMessage("上位机写 [D3056] = 1", Color.Green)));
+                    continue;
+                }
+
+                // 更新剩余数量
+                row[ColumnRemaining] = result.QtyResidual;
+                updatedCount++;
+
+                if (result.QtyResidual <= stopQty)
+                {
+                    AddLogMessage($"[{bydpn}] 位置 {location} 剩余 {result.QtyResidual}（停机数量 {stopQty}），小件数量不足，请及时上料！", Color.Red);
+                    Task.Run(() => PlcWrite("D3056", (short)1));
+                    BeginInvoke(new Action(() => AddLogMessage("上位机写 [D3056] = 1", Color.Green)));
+                }
+                else
+                {
+                    AddLogMessage($"[{bydpn}] 位置 {location} 剩余数量已更新：{result.QtyResidual}", Color.Green);
+                }
+            }
+
+            if (!stopped)
+            {
+                SaveTable();
+                AddLogMessage($"剩余数量更新完成：共更新 {updatedCount} 个小件。", Color.Green);
+            }
+            else
+            {
+                AddLogMessage("因接口返回失败，已停止剩余数量更新流程。", Color.Red);
+            }
         }
 
         /// <summary>
@@ -1773,16 +2085,14 @@ namespace WindowsFormsApp
                 return;
             }
 
-            // 遍历所有行，筛选出规则匹配且未绑定的行
+            // 遍历所有行，筛选出规则匹配的行（含已绑定）
             for (int i = 0; i < _partsTable.Rows.Count; i++)
             {
                 DataRow row = _partsTable.Rows[i];
                 string existingCode = Convert.ToString(row[ColumnDid]).Trim();
                 string rule = Convert.ToString(row[ColumnDidRule]).Trim();
+                bool isBound = !string.IsNullOrEmpty(existingCode);
 
-                // 已绑定则跳过
-                if (!string.IsNullOrEmpty(existingCode))
-                    continue;
                 // 无规则则跳过
                 if (string.IsNullOrEmpty(rule))
                     continue;
@@ -1790,16 +2100,16 @@ namespace WindowsFormsApp
                 if (!IsRuleMatch(inputCode, rule))
                     continue;
 
-                string Bydpn = Convert.ToString(row[ColumnBydpn]);
-                double totalCount = Convert.ToDouble(row[ColumnRemarks]);
-                double deductCount = Convert.ToDouble(row[ColumnQty]);
+                string bydpn = Convert.ToString(row[ColumnBydpn]);
 
+                string prefix = isBound ? "⚠ 已绑定 | " : "";
                 candidates.Add(new MatchCandidate
                 {
                     RowIndex = i,
+                    IsBound = isBound,
                     DisplayText = string.Format(
-                        "第 {0} 行 | 名称: {1} | 规则: {2}",
-                        i + 1, Bydpn, rule)
+                        "{0}第 {1} 行 | 名称: {2} | 规则: {3}" + (isBound ? " | 已绑定: {4}" : ""),
+                        prefix, i + 1, bydpn, rule, existingCode)
                 });
             }
 
@@ -1813,14 +2123,41 @@ namespace WindowsFormsApp
 
             if (candidates.Count == 0)
             {
-                SetStatus("没有找到匹配项。请检查输入的小件码是否符合规则，或者该行是否已经绑定。");
+                SetStatus("没有找到匹配项。请检查输入的小件码是否符合规则。");
                 return;
             }
 
-            if (candidates.Count == 1)
+            if (candidates.Count == 1 && !candidates[0].IsBound)
             {
-                // 唯一匹配 → 自动绑定，无需手动点击
+                // 唯一匹配且未绑定 → 自动绑定
                 ExecuteBind(inputCode, candidates[0]);
+                return;
+            }
+
+            if (candidates.Count == 1 && candidates[0].IsBound)
+            {
+                // 唯一匹配且已绑定 → 弹窗确认上新小件
+                var single = candidates[0];
+                DataRow boundRow = _partsTable.Rows[single.RowIndex];
+                string oldDid = Convert.ToString(boundRow[ColumnDid]);
+                string boundBydpn = Convert.ToString(boundRow[ColumnBydpn]);
+                var dlgResult = MessageBox.Show(
+                    string.Format("该位置已绑定小件码 [{0}]（{1}）。\n是否更换为新小件码 [{2}]？\n\n点击[是]将先卸下旧小件，再上新的小件码。",
+                        oldDid, boundBydpn, inputCode),
+                    "上新小件确认",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (dlgResult == DialogResult.Yes)
+                {
+                    ReplaceAndLoadNew(inputCode, boundRow);
+                    txtInputCode.Clear();
+                    cmbMatches.DataSource = null;
+                }
+                else
+                {
+                    SetStatus("已取消上新小件。");
+                }
                 return;
             }
 
@@ -1828,7 +2165,7 @@ namespace WindowsFormsApp
             {
                 cmbMatches.ShowDropDown();
             }));
-            SetStatus(string.Format("找到 {0} 个可绑定项，请从下拉框中选择。", candidates.Count));
+            SetStatus(string.Format("找到 {0} 个匹配项，请从下拉框中选择。", candidates.Count));
         }
 
         /// <summary>
@@ -1901,14 +2238,32 @@ namespace WindowsFormsApp
 
             DataRow targetRow = _partsTable.Rows[candidate.RowIndex];
 
-            // 二次确认目标行未被绑定
-            if (!string.IsNullOrWhiteSpace(Convert.ToString(targetRow[ColumnDid])))
+            // 已绑定行 → 弹窗确认上新小件
+            if (candidate.IsBound)
             {
-                MessageBox.Show("该行已经有绑定值，请重新匹配。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                RefreshMatchCandidates();
+                string oldDid = Convert.ToString(targetRow[ColumnDid]);
+                string boundBydpn = Convert.ToString(targetRow[ColumnBydpn]);
+                var dlgResult = MessageBox.Show(
+                    string.Format("该位置已绑定小件码 [{0}]（{1}）。\n是否更换为新小件码 [{2}]？\n\n点击[是]将先卸下旧小件，再上新的小件码。",
+                        oldDid, boundBydpn, inputCode),
+                    "上新小件确认",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (dlgResult == DialogResult.Yes)
+                {
+                    ReplaceAndLoadNew(inputCode, targetRow);
+                }
+                else
+                {
+                    SetStatus("已取消上新小件。");
+                }
+                txtInputCode.Clear();
+                cmbMatches.DataSource = null;
                 return;
             }
 
+            // 未绑定的新行 → 直接绑定
             targetRow[ColumnDid] = inputCode;
             SaveTable();
             dataGridViewParts.Refresh();
@@ -1918,6 +2273,68 @@ namespace WindowsFormsApp
 
             txtInputCode.Clear();
             cmbMatches.DataSource = null;
+        }
+
+        /// <summary>
+        /// 上新小件：先调 UpdateLoadDidInfo 下旧小件，再调 LoadMaterialUp 上新的小件码
+        /// </summary>
+        private void ReplaceAndLoadNew(string newDid, DataRow row)
+        {
+            string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
+            string location = Convert.ToString(row[ColumnLocation]) ?? "";
+            string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
+            int stopQty;
+            int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
+            double remaining = Convert.ToDouble(row[ColumnRemaining]);
+
+            string station = g_DicMESConfig["Config"]["Operation"];
+            string shoporder = g_DicMESConfig["Config"]["Resource"];
+            string line = g_DicMESConfig["Config"]["Line"];
+            string loadId = g_DicMESConfig["Config"]["Load_ID"];
+            string dateCode = g_DicMESConfig["Config"]["LoginID"];
+
+            // 判断 STATE：≤stopQty 或 ==0 → 用完(1)，否则 → 未完卸下(2)
+            string state = (remaining <= stopQty || remaining == 0) ? "1" : "2";
+            string stateDesc = state == "1" ? "用完" : "未完卸下";
+
+            AddLogMessage($"开始上新小件：旧码 [{oldDid}] → 新码 [{newDid}]（{bydpn}，STATE={state}（{stateDesc}））", Color.Blue);
+
+            // 1. 下旧小件
+            string msg1;
+            bool ok1 = FormHelper.UpdateLoadDidInfo(
+                _mesUrl, _loginId, _clientId, oldDid, station, shoporder, line,
+                state, loadId, location, out msg1);
+
+            if (!ok1)
+            {
+                AddLogMessage($"UpdateLoadDidInfo 失败：{msg1}", Color.Red);
+                MessageBox.Show($"下旧小件失败：{msg1}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            AddLogMessage($"UpdateLoadDidInfo 成功：旧小件 [{oldDid}] STATE={state}（{stateDesc}）", Color.Green);
+
+            // 2. 上新的小件码
+            string remarks = Convert.ToString(row[ColumnRemarks]) ?? "0";
+            string msg2;
+            bool ok2 = FormHelper.LoadMaterialUp(
+                _mesUrl, _loginId, _clientId, loadId, location, bydpn, station,
+                line, shoporder, newDid, remarks, dateCode, out msg2);
+
+            if (!ok2)
+            {
+                AddLogMessage($"LoadMaterialUp 失败：{msg2}", Color.Red);
+                MessageBox.Show($"上新小件失败：{msg2}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            AddLogMessage($"LoadMaterialUp 成功：新小件 [{newDid}] 已上到 {bydpn}（{location}）", Color.Green);
+
+            // 3. 更新本地行
+            row[ColumnDid] = newDid;
+            row[ColumnRemaining] = Convert.ToDouble(remarks);
+            SaveTable();
+            dataGridViewParts.Refresh();
+
+            SetStatus($"上新小件成功：{bydpn} [{oldDid}] → [{newDid}]，剩余数量重置为 {remarks}");
         }
 
         private void cmbMatches_SelectedIndexChanged(object sender, EventArgs e)

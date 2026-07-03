@@ -297,6 +297,193 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
+        /// 获取小件上料信息（最新剩余数量）
+        /// </summary>
+        public static LoadUpResult GetLoadUpByParams(
+            string url, string loginId, string clientId,
+            string shoporder, string location, string line)
+        {
+            var result = new LoadUpResult();
+            try
+            {
+                var param = new
+                {
+                    LOGIN_ID = loginId,
+                    CLIENT_ID = clientId,
+                    SHOPORDER = shoporder,
+                    LOCATION = location,
+                    LINE = line
+                };
+                string content = "?method=GetLoadUpByParams&param=" + JsonConvert.SerializeObject(param);
+
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("GetLoadUpByParams Send:" + url + content);
+                string str_result = ht.Get(url + content, 1000);
+                WriteLogs.WriteLog("GetLoadUpByParams Receive:" + str_result);
+
+                var json = JObject.Parse(str_result);
+                string res = json["RESULT"]?.ToString();
+                if (res == "FAIL")
+                {
+                    result.FailMessage = json["MESSAGE"]?.ToString() ?? "未知错误";
+                    return result;
+                }
+
+                result.Ok = true;
+                var loadUps = json["LoadUps"] as JArray;
+                if (loadUps != null && loadUps.Count > 0)
+                {
+                    result.Found = true;
+                    result.QtyResidual = Convert.ToDouble(loadUps[0]["qtyResidual"] ?? 0);
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteLogs.WriteLog("GetLoadUpByParams Error:" + ex.Message);
+                result.Ok = false;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 修改 DID 上料信息（下旧小件）
+        /// </summary>
+        public static bool UpdateLoadDidInfo(
+            string url, string loginId, string clientId,
+            string did, string station, string shoporder, string line,
+            string state, string loadId, string location, out string msg)
+        {
+            msg = "";
+            try
+            {
+                var param = new
+                {
+                    LOGIN_ID = loginId,
+                    CLIENT_ID = clientId,
+                    DID = did,
+                    STATION = station,
+                    SHOPORDER = shoporder,
+                    LINE = line,
+                    STATE = state,
+                    LOAD_ID = loadId,
+                    LOCATION = location
+                };
+                string content = "?method=UpdateLoadDidInfo&param=" + JsonConvert.SerializeObject(param);
+
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("UpdateLoadDidInfo Send:" + url + content);
+                string str_result = ht.Get(url + content, 1000);
+                WriteLogs.WriteLog("UpdateLoadDidInfo Receive:" + str_result);
+
+                var json = JObject.Parse(str_result);
+                msg = str_result;
+                return json["RESULT"]?.ToString() == "PASS";
+            }
+            catch (Exception ex)
+            {
+                msg = ex.Message;
+                WriteLogs.WriteLog("UpdateLoadDidInfo Error:" + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 站位表上料（上新小件码）
+        /// </summary>
+        public static bool LoadMaterialUp(
+            string url, string loginId, string clientId,
+            string loadId, string location, string bydpn, string station,
+            string line, string shoporder, string did, string remarks,
+            string dateCode, out string msg)
+        {
+            msg = "";
+            try
+            {
+                var param = new
+                {
+                    LOGIN_ID = loginId,
+                    CLIENT_ID = clientId,
+                    LOAD_ID = loadId,
+                    LOCATION = location,
+                    BYDPN = bydpn,
+                    STATION = station,
+                    LINE = line,
+                    SHOPORDER = shoporder,
+                    DID = did,
+                    QTY = remarks,
+                    DATE_CODE = dateCode,
+                    REMARK = "小件上料",
+                    qty = remarks,
+                    QtyResidual = remarks,
+                    LOADUP_TYPE = "0"
+                };
+                string content = "?method=LoadMaterialUp&param=" + JsonConvert.SerializeObject(param);
+
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("LoadMaterialUp Send:" + url + content);
+                string str_result = ht.Get(url + content, 1000);
+                WriteLogs.WriteLog("LoadMaterialUp Receive:" + str_result);
+
+                var json = JObject.Parse(str_result);
+                msg = str_result;
+                return json["RESULT"]?.ToString() == "PASS";
+            }
+            catch (Exception ex)
+            {
+                msg = ex.Message;
+                WriteLogs.WriteLog("LoadMaterialUp Error:" + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 扣料，扣除小件数量
+        /// </summary>
+        public static bool Binding(
+            string url, string loginId, string clientId,
+            string sfc, string shopOrder, string station, string loadId,
+            string line, string projectName, string productName,
+            string multiple, string schedulingId, string allowNegative,
+            out string msg)
+        {
+            msg = "";
+            try
+            {
+                var param = new
+                {
+                    LOGIN_ID = loginId,
+                    CLIENT_ID = clientId,
+                    SFC = sfc,
+                    SHOP_ORDER = shopOrder,
+                    STATION = station,
+                    LOAD_ID = loadId,
+                    LINE = line,
+                    PROJECT_NAME = projectName,
+                    PRODUCT_NAME = productName,
+                    MULTIPLE = multiple,
+                    SCHEDULING_ID = schedulingId,
+                    ALLOW_NEGATIVE = allowNegative
+                };
+                string content = "?method=Binding&param=" + JsonConvert.SerializeObject(param);
+
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("Binding Send:" + url + content);
+                string str_result = ht.Get(url + content, 1000);
+                WriteLogs.WriteLog("Binding Receive:" + str_result);
+
+                var json = JObject.Parse(str_result);
+                msg = str_result;
+                return json["RESULT"]?.ToString() == "PASS";
+            }
+            catch (Exception ex)
+            {
+                msg = ex.Message;
+                WriteLogs.WriteLog("Binding Error:" + ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// 上传 Config 绑定结果到 MES
         /// </summary>
         public static bool AddSfcKey(

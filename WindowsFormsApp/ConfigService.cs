@@ -35,6 +35,7 @@ namespace WindowsFormsApp
             TryReadValue("Config", "Operation", "Operation", dic);
             TryReadValue("Config", "PRODUCT", "PRODUCT", dic);
             TryReadValue("Config", "SapShoporder", "SapShoporder", dic);
+            TryReadValue("Config", "Resource", "Resource", dic);
             TryReadValue("Config", "Remark", "Remark", dic);
             TryReadValue("Config", "SchedulingID", "SchedulingID", dic);
             TryReadValue("Config", "StationName", "StationName", dic);
