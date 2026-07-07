@@ -857,6 +857,7 @@ namespace WindowsFormsApp
             // 收集未绑定和数量不足的小件
             List<string> unboundParts = new List<string>();
             List<string> notEnoughParts = new List<string>();
+            List<string> lowSurplusWarnings = new List<string>();
 
             foreach (DataRow row in _partsTable.Rows)
             {
@@ -872,16 +873,23 @@ namespace WindowsFormsApp
                 double remaining = Convert.ToDouble(row[ColumnRemaining]);
                 double deductCount = Convert.ToDouble(row[ColumnQty]);
                 int minSurplus = Convert.ToInt32(row[ColumnMinSurplus]);
+                int stopQty;
+                int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
 
                 if (remaining < deductCount)
                 {
                     notEnoughParts.Add(
                         bydpn + "：剩余数量 " + remaining + "，每次扣减 " + deductCount + "（不够扣）");
                 }
-                else if (remaining < minSurplus)
+                else if (remaining <= stopQty)
                 {
                     notEnoughParts.Add(
-                        bydpn + "：剩余数量 " + remaining + " < 最小剩余 " + minSurplus + "（低于最小剩余）");
+                        bydpn + "：剩余数量 " + remaining + " ≤ 停机数量 " + stopQty + "（低于停机数量）");
+                }
+                else if (remaining < minSurplus)
+                {
+                    lowSurplusWarnings.Add(
+                        bydpn + "：剩余数量 " + remaining + " < 最小剩余 " + minSurplus + "（低于最小剩余，仍可过站）");
                 }
             }
 
@@ -902,6 +910,14 @@ namespace WindowsFormsApp
                     string.Join("；", notEnoughParts),
                     Color.Red);
                 return false;
+            }
+
+            if (lowSurplusWarnings.Count > 0)
+            {
+                AddLogMessage(
+                    "以下小件剩余数量低于最小剩余：" +
+                    string.Join("；", lowSurplusWarnings),
+                    Color.Orange);
             }
 
             return true;
@@ -1870,7 +1886,15 @@ namespace WindowsFormsApp
 
                 if (!result.Found)
                 {
-                    // LoadUps 为空 → 仅告警，不写 PLC
+                    // LoadUps 为空 → 清空本地 Did 和剩余数量，仅告警，不写 PLC
+                    string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
+                    double oldRemaining = Convert.ToDouble(row[ColumnRemaining]);
+                    if (!string.IsNullOrWhiteSpace(oldDid) || oldRemaining > 0)
+                    {
+                        row[ColumnDid] = DBNull.Value;
+                        row[ColumnRemaining] = 0;
+                        AddLogMessage($"[{bydpn}] 位置 {location} 接口返回小件信息为空，已清空本地 Did 和剩余数量。", Color.Blue);
+                    }
                     AddLogMessage($"[{bydpn}] 位置 {location} 小件数量不足，请及时上料！", Color.Red);
                     continue;
                 }
@@ -2415,6 +2439,15 @@ namespace WindowsFormsApp
 
             if (!result.Found)
             {
+                // LoadUps 为空 → 清空本地 Did 和剩余数量
+                string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
+                double oldRemaining = Convert.ToDouble(row[ColumnRemaining]);
+                if (!string.IsNullOrWhiteSpace(oldDid) || oldRemaining > 0)
+                {
+                    row[ColumnDid] = DBNull.Value;
+                    row[ColumnRemaining] = 0;
+                    AddLogMessage($"[{bydpn}] 位置 {location} 接口返回小件信息为空，已清空本地 Did 和剩余数量。", Color.Blue);
+                }
                 AddLogMessage($"[{bydpn}] 位置 {location} 获取最新数量为空，小件数量不足，请及时上料！", Color.Red);
                 return;
             }
