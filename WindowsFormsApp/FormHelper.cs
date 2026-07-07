@@ -335,6 +335,7 @@ namespace WindowsFormsApp
                 {
                     result.Found = true;
                     result.QtyResidual = Convert.ToDouble(loadUps[0]["qtyResidual"] ?? 0);
+                    result.Did = loadUps[0]["did"]?.ToString() ?? "";
                 }
             }
             catch (Exception ex)

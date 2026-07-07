@@ -871,11 +871,17 @@ namespace WindowsFormsApp
 
                 double remaining = Convert.ToDouble(row[ColumnRemaining]);
                 double deductCount = Convert.ToDouble(row[ColumnQty]);
+                int minSurplus = Convert.ToInt32(row[ColumnMinSurplus]);
 
                 if (remaining < deductCount)
                 {
                     notEnoughParts.Add(
-                        bydpn + "：剩余数量 " + remaining + "，每次扣减 " + deductCount);
+                        bydpn + "：剩余数量 " + remaining + "，每次扣减 " + deductCount + "（不够扣）");
+                }
+                else if (remaining < minSurplus)
+                {
+                    notEnoughParts.Add(
+                        bydpn + "：剩余数量 " + remaining + " < 最小剩余 " + minSurplus + "（低于最小剩余）");
                 }
             }
 
@@ -1869,11 +1875,18 @@ namespace WindowsFormsApp
                     continue;
                 }
 
-                // 更新剩余数量
+                // 更新剩余数量；若本地 Did 为空且接口返回了 Did，则回填
                 row[ColumnRemaining] = result.QtyResidual;
+                if (string.IsNullOrWhiteSpace(Convert.ToString(row[ColumnDid]))
+                    && !string.IsNullOrWhiteSpace(result.Did))
+                {
+                    row[ColumnDid] = result.Did;
+                    AddLogMessage($"[{bydpn}] 接口返回小件码 [{result.Did}]，已自动回填。", Color.Blue);
+                }
                 updatedCount++;
 
                 if (result.QtyResidual <= stopQty)
+
                 {
                     AddLogMessage($"[{bydpn}] 位置 {location} 剩余 {result.QtyResidual}（停机数量 {stopQty}），小件数量不足，请及时上料！", Color.Red);
                     Task.Run(() => PlcWrite("D3056", (short)1));
@@ -2343,6 +2356,9 @@ namespace WindowsFormsApp
             }
             AddLogMessage($"UpdateLoadDidInfo 成功：旧小件 [{oldDid}] STATE={state}（{stateDesc}）", Color.Green);
 
+            // 下料成功后立即清除旧 Did
+            row[ColumnDid] = DBNull.Value;
+
             // 2. 上新的小件码
             string remarks = Convert.ToString(row[ColumnRemarks]) ?? "0";
             string msg2;
@@ -2394,6 +2410,14 @@ namespace WindowsFormsApp
             }
 
             row[ColumnRemaining] = result.QtyResidual;
+
+            // 若本地 Did 为空且接口返回了 Did，则回填
+            if (string.IsNullOrWhiteSpace(Convert.ToString(row[ColumnDid]))
+                && !string.IsNullOrWhiteSpace(result.Did))
+            {
+                row[ColumnDid] = result.Did;
+                AddLogMessage($"[{bydpn}] 接口返回小件码 [{result.Did}]，已自动回填。", Color.Blue);
+            }
 
             if (result.QtyResidual <= stopQty)
             {

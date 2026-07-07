@@ -43,6 +43,8 @@ namespace WindowsFormsApp
         public double QtyResidual { get; set; }
         /// <summary>LoadUps 数组是否有数据</summary>
         public bool Found { get; set; }
+        /// <summary>接口返回的小件码</summary>
+        public string Did { get; set; }
     }
 
     /// <summary>
