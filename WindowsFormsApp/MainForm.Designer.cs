@@ -507,7 +507,7 @@
             this.txtInputCode.TabIndex = 4;
             this.txtInputCode.TextAlignment = System.Drawing.ContentAlignment.MiddleLeft;
             this.txtInputCode.Watermark = "";
-            this.txtInputCode.TextChanged += new System.EventHandler(this.txtInputCode_TextChanged);
+            this.txtInputCode.KeyDown += new System.Windows.Forms.KeyEventHandler(this.txtInputCode_KeyDown);
             // 
             // uiLabel12
             // 

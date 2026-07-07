@@ -1759,11 +1759,16 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 小件码输入框内容变化时，实时刷新匹配候选项
+        /// 小件码输入框按回车时触发匹配
         /// </summary>
-        private void txtInputCode_TextChanged(object sender, EventArgs e)
+        private void txtInputCode_KeyDown(object sender, KeyEventArgs e)
         {
-            RefreshMatchCandidates();
+            if (e.KeyCode == Keys.Enter)
+            {
+                RefreshMatchCandidates();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         }
     }
 }
