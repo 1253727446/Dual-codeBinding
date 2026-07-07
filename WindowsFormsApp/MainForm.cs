@@ -1875,13 +1875,23 @@ namespace WindowsFormsApp
                     continue;
                 }
 
-                // 更新剩余数量；若本地 Did 为空且接口返回了 Did，则回填
+                // 更新剩余数量；接口返回 Did 与本地不一致时用接口值覆盖（含清空）
                 row[ColumnRemaining] = result.QtyResidual;
-                if (string.IsNullOrWhiteSpace(Convert.ToString(row[ColumnDid]))
-                    && !string.IsNullOrWhiteSpace(result.Did))
+                string localDid = Convert.ToString(row[ColumnDid]) ?? "";
+                string apiDid = result.Did ?? "";
+                if (!string.Equals(localDid.Trim(), apiDid.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
-                    row[ColumnDid] = result.Did;
-                    AddLogMessage($"[{bydpn}] 接口返回小件码 [{result.Did}]，已自动回填。", Color.Blue);
+                    row[ColumnDid] = apiDid;
+                    if (string.IsNullOrWhiteSpace(apiDid))
+                    {
+                        AddLogMessage($"[{bydpn}] 接口返回小件码为空，已清空本地 [{localDid}]。", Color.Blue);
+                    }
+                    else
+                    {
+                        AddLogMessage($"[{bydpn}] 接口返回小件码 [{apiDid}]" +
+                            (string.IsNullOrWhiteSpace(localDid) ? "" : $"，覆盖本地 [{localDid}]") +
+                            "，已同步。", Color.Blue);
+                    }
                 }
                 updatedCount++;
 
@@ -2411,12 +2421,22 @@ namespace WindowsFormsApp
 
             row[ColumnRemaining] = result.QtyResidual;
 
-            // 若本地 Did 为空且接口返回了 Did，则回填
-            if (string.IsNullOrWhiteSpace(Convert.ToString(row[ColumnDid]))
-                && !string.IsNullOrWhiteSpace(result.Did))
+            // 接口返回 Did 与本地不一致时用接口值覆盖（含清空）
+            string localDid = Convert.ToString(row[ColumnDid]) ?? "";
+            string apiDid = result.Did ?? "";
+            if (!string.Equals(localDid.Trim(), apiDid.Trim(), StringComparison.OrdinalIgnoreCase))
             {
-                row[ColumnDid] = result.Did;
-                AddLogMessage($"[{bydpn}] 接口返回小件码 [{result.Did}]，已自动回填。", Color.Blue);
+                row[ColumnDid] = apiDid;
+                if (string.IsNullOrWhiteSpace(apiDid))
+                {
+                    AddLogMessage($"[{bydpn}] 接口返回小件码为空，已清空本地 [{localDid}]。", Color.Blue);
+                }
+                else
+                {
+                    AddLogMessage($"[{bydpn}] 接口返回小件码 [{apiDid}]" +
+                        (string.IsNullOrWhiteSpace(localDid) ? "" : $"，覆盖本地 [{localDid}]") +
+                        "，已同步。", Color.Blue);
+                }
             }
 
             if (result.QtyResidual <= stopQty)
