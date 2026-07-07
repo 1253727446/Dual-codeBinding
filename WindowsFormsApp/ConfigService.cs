@@ -77,6 +77,7 @@ namespace WindowsFormsApp
             TryReadValue("SOFTWARE", "selectedConfig", "selectedConfig", dic);
             TryReadValue("SOFTWARE", "addSfcKeyDataName", "addSfcKeyDataName", dic);
             TryReadValue("SOFTWARE", "machineNoswitch", "machineNoswitch", dic);
+            TryReadValue("SOFTWARE", "laststation", "laststation", dic);
 
             return dic;
         }

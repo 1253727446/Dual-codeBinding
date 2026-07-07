@@ -538,5 +538,57 @@ namespace WindowsFormsApp
             }
         }
 
+        /// <summary>
+        /// 根据当前 StationID 反查上一工站信息
+        /// </summary>
+        public static bool GetAboutStationByStationId(
+            string url, string loginId, string clientId, string stationId,
+            out string prevName, out string prevId, out string msg)
+        {
+            prevName = "";
+            prevId = "";
+            msg = "";
+
+            var param = new
+            {
+                LOGIN_ID = loginId,
+                CLIENT_ID = clientId,
+                STATION_ID = stationId
+            };
+            string content = "?method=GetAboutStationByStationId&param=" + JsonConvert.SerializeObject(param);
+
+            try
+            {
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("GetAboutStationByStationId Send:" + url + content);
+                string str_result = ht.Get(url + content, 2000);
+                WriteLogs.WriteLog("GetAboutStationByStationId Receive:" + str_result);
+
+                JObject json = JObject.Parse(str_result);
+                string result = json["RESULT"]?.ToString();
+                if (result == "PASS")
+                {
+                    JToken prev = json["PREVIOUS"];
+                    if (prev != null)
+                    {
+                        prevName = prev["name"]?.ToString() ?? "";
+                        prevId = prev["id"]?.ToString() ?? "";
+                    }
+                    return !string.IsNullOrEmpty(prevName);
+                }
+                else
+                {
+                    msg = json["MESSAGE"]?.ToString() ?? "接口返回失败";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                msg = ex.Message;
+                WriteLogs.WriteLog("GetAboutStationByStationId Error:" + msg);
+                return false;
+            }
+        }
+
     }
 }

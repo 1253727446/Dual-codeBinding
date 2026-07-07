@@ -1,8 +1,4 @@
-﻿using HslCommunication;
-using HslCommunication.Profinet.Omron;
-using Newtonsoft.Json;
-
-using SimpleTCP;
+﻿using Newtonsoft.Json;
 using Sunny.UI;
 using System;
 using System.Collections.Generic;
@@ -11,7 +7,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms; 
 
@@ -48,40 +43,14 @@ namespace WindowsFormsApp
         private string _mesUrl;
         private string _loginId;
         private string _clientId;
-        /// <summary>PLC 通信结果地址 / 启动指令</summary>
-        private string mesresult, startscan, _startOrder, _heartbeat;
-        /// <summary>扫码超时时间（秒），支持小数如 2.5</summary>
-        private double timeout = 0;
-        /// <summary>扫码开关：false 时忽略 D3000 扫码信号，不发送 start 指令，关闭超时检测</summary>
-        private bool _startScanSwitchEnabled;
         /// <summary>胶水校验是否启用</summary>
         private bool _glueCheckEnabled;
+        /// <summary>上一工站过站开关</summary>
+        private bool _lastStationEnabled;
         /// <summary>胶水 DID（校验通过后缓存，供 TestDataCollect 使用）</summary>
         private string _glueDid;
 
-        // ========== 外部设备连接 ==========
-        /// <summary>欧姆龙 PLC 通讯客户端（TCP 模式）</summary>
-        private OmronFinsNet _plcTcp;
-        /// <summary>欧姆龙 PLC 通讯客户端（UDP 模式）</summary>
-        private OmronFinsUdp _plcUdp;
-        /// <summary>当前 PLC 通讯模式：true=TCP, false=UDP</summary>
-        private bool _plcIsTcp = true;
-        /// <summary>PLC 端口号（TCP/UDP 共用）</summary>
-        private int _plcPort = 9600;
-        /// <summary>PLC 连接状态（由本类自行维护）</summary>
-        private volatile bool _plcConnected;
-        /// <summary>防止监控定时器重入</summary>
-        private int _monitorBusy;
-        /// <summary>扫码枪 TCP 客户端</summary>
-        private SimpleTcpClient scanclient;
-        /// <summary>后台心跳任务的取消令牌（同时用于重连取消）</summary>
-        private CancellationTokenSource _cts;
-        /// <summary>扫码枪当前是否已连接（避免依赖 UI 标签判断状态）</summary>
-        private bool _scanConnected;
-        /// <summary>扫码枪 IP（缓存，避免反复查字典）</summary>
-        private string _scanIp;
-        /// <summary>扫码枪端口（缓存）</summary>
-        private int _scanPort;
+        // ========== 小件上料辅助 ==========
         /// <summary>防止下拉框填充时触发 SelectedIndexChanged</summary>
         private bool _populatingMatches;
 
@@ -98,82 +67,6 @@ namespace WindowsFormsApp
         private DateTime _lastShiftDate = DateTime.MinValue;
         /// <summary>换班检查定时器</summary>
         private System.Windows.Forms.Timer _shiftTimer;
-        /// <summary>PLC 地址监听定时器</summary>
-        private System.Timers.Timer _plcMonitorTimer;
-        /// <summary>扫码枪健康检查定时器</summary>
-        private System.Windows.Forms.Timer _scanHealthTimer;
-        /// <summary>PLC 是否正在重连中（防止重复触发）</summary>
-        private bool _plcReconnecting;
-        /// <summary>PLC 连续读取失败计数（UDP 模式下容忍偶发丢包，连续失败 N 次才断开）</summary>
-        private int _plcReadFailCount;
-        /// <summary>UDP 模式下连续读取失败多少次才判定断开</summary>
-        private const int UdpFailThreshold = 5;
-        /// <summary>扫码枪是否正在重连中（防止重复触发）</summary>
-        private bool _scanReconnecting;
-        /// <summary>D3000 扫码信号是否已就绪（1=允许扫码）</summary>
-        private volatile bool _scanArmed;
-        /// <summary>D3000 变为 1 的时间戳，用于超时校验</summary>
-        private DateTime _scanArmedTime;
-        /// <summary>上一次 D3000 的值，用于检测上升沿</summary>
-        private short _prevD3000Value;
-        private readonly object _scanCycleLock = new object();
-        private bool _scanCycleActive;
-        private CancellationTokenSource _scanTimeoutCts;
-
-        // ========== PLC 通讯助手方法 ==========
-        /// <summary>当前 PLC 是否已连接（由本类自行维护状态）</summary>
-        private bool PlcConnected => _plcConnected;
-
-        /// <summary>读取 PLC 单字（Int16）</summary>
-        private OperateResult<short> PlcReadInt16(string addr)
-        {
-            if (_plcIsTcp)
-                return _plcTcp != null ? _plcTcp.ReadInt16(addr) : new OperateResult<short>("PLC 未连接");
-            return _plcUdp != null ? _plcUdp.ReadInt16(addr) : new OperateResult<short>("PLC 未连接");
-        }
-
-        /// <summary>写入 PLC 单字（short）</summary>
-        private OperateResult PlcWrite(string addr, short val)
-        {
-            if (_plcIsTcp)
-                return _plcTcp != null ? _plcTcp.Write(addr, val) : new OperateResult("PLC 未连接");
-            return _plcUdp != null ? _plcUdp.Write(addr, val) : new OperateResult("PLC 未连接");
-        }
-
-        /// <summary>写入 PLC 单字（int → short）</summary>
-        private OperateResult PlcWrite(string addr, int val) =>
-            PlcWrite(addr, (short)val);
-
-        /// <summary>连接 PLC（根据当前模式创建 TCP 或 UDP 客户端）</summary>
-        private OperateResult PlcConnect(string ip, int port)
-        {
-            _plcConnected = false;
-            if (_plcIsTcp)
-            {
-                _plcTcp = new OmronFinsNet(ip, port);
-                _plcTcp.ConnectTimeOut = 2000;
-                _plcTcp.ReceiveTimeOut = 2000;
-                var result = _plcTcp.ConnectServer();
-                if (result.IsSuccess) _plcConnected = true;
-                return result;
-            }
-            else
-            {
-                _plcUdp = new OmronFinsUdp(ip, port);
-                _plcUdp.ReceiveTimeOut = 2000;
-                // UDP 无连接，不标记已连接——由后续 Read 验证通过后再标记
-                return new OperateResult { IsSuccess = true, Message = "UDP ready" };
-            }
-        }
-
-        /// <summary>断开 PLC 连接（同时关闭 TCP 和 UDP 客户端）</summary>
-        private void PlcClose()
-        {
-            _plcConnected = false;
-            _plcTcp?.ConnectClose();
-            _plcTcp = null;
-            _plcUdp = null;
-        }
 
         /// <summary></summary>
         /// 构造函数：初始化组件、加载全部配置
@@ -185,36 +78,37 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 窗体加载：按顺序缓存配置 → 初始化参数 → 获取规则 → 加载表格 →
-        /// 绑定网格 → 连接 PLC → 连接扫码枪 → 启用心跳 → 启动监听 → 注册关闭事件
+        /// 窗体加载：缓存配置 → 初始化参数 → 获取规则 → 加载表格 → 绑定网格 → 启动换班定时器 → 注册关闭事件
         /// </summary>
         private void Form1_Load(object sender, EventArgs e)
         {
             CacheConfig();               // 缓存 MES 接口 URL / LoginID / ClientID
-            InitSettings();              // 读取 PLC 超时 / 结果地址 / 启动指令
+            InitSettings();              // 读取胶水校验等软件配置
             GetCustomData();             // 从 MES 获取 SFC 条码匹配规则
             LoadOrCreateTable();         // 从本地 XML 恢复或从 MES 拉取小件表格
             BindGrid();                  // 小件 DataTable 绑定到 DataGridView
-            InitPlcMonitorGrid();        // 初始化 PLC 地址监听表格（D3000/D3001/D5000）
             LoadCounters();              // 从 counters.json 恢复过站计数器
-            InitPlcModeCombo();          // 初始化 PLC 连接模式下拉框（TCP/UDP）
-            ConnectToPlc();              // 连接欧姆龙 PLC
-            ConnectToScanner();          // 连接扫码枪 TCP 客户端
-            StartHeartbeat();            // 启动后台心跳：每 2s 向 D5000 写 1
-            StartPlcMonitor();           // 启动 PLC 地址监听：每 500ms 读取并刷新
-            StartScanHealthCheck();      // 启动扫码枪健康检查：每 3s 探测并自动重连
             StartShiftTimer();           // 启动换班检查定时器（8:00 / 20:00）
+            SFC_UITextBox.KeyDown += SFC_UITextBox_KeyDown;  // 注册回车触发过站
             this.FormClosing += MainForm_FormClosing;  // 注册关闭事件释放资源
         }
 
         /// <summary>
-        /// 重新加载全部配置文件，使修改实时生效（每个扫码周期开始时调用）
+        /// SFC 输入框回车触发过站流程
         /// </summary>
-        private void ReloadConfig()
+        private void SFC_UITextBox_KeyDown(object sender, KeyEventArgs e)
         {
-            g_DicMESConfig = new ConfigService().LoadAllConfig();
-            CacheConfig();
-            InitSettings();
+            if (e.KeyCode == Keys.Enter)
+            {
+                string sfc = SFC_UITextBox.Text.Trim();
+                if (!string.IsNullOrWhiteSpace(sfc))
+                {
+                    SFC_UITextBox.Text = "";
+                    Task.Run(() => ruleSFC(sfc));
+                }
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         }
 
         /// <summary>
@@ -228,395 +122,11 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 读取 Setting 节中的运行参数到成员变量
+        /// 读取 SOFTWARE 节中的软件行为配置
         /// </summary>
         private void InitSettings()
         {
-            startscan = g_DicMESConfig["Setting"]["startscan"];
-            _startOrder = g_DicMESConfig["Setting"]["startorder"];
-            timeout = double.Parse(g_DicMESConfig["Setting"]["timeout"]);
-            mesresult = g_DicMESConfig["Setting"]["mesresult"];
-            _heartbeat = g_DicMESConfig["Setting"]["heartbeat"];
-            int.TryParse(g_DicMESConfig["Setting"]["plcport"], out _plcPort);
-            bool.TryParse(g_DicMESConfig["SOFTWARE"]["startscanswitch"], out _startScanSwitchEnabled);
-        }
-
-        /// <summary>
-        /// 从配置读取 PLC IP 并建立连接
-        /// </summary>
-        /// <summary>
-        /// 初始化 PLC 连接模式下拉框：TCP / UDP，默认 TCP
-        /// </summary>
-        private void InitPlcModeCombo()
-        {
-            if (uiComboBox1 == null) return;
-            uiComboBox1.Items.Clear();
-            uiComboBox1.Items.Add("TCP");
-            uiComboBox1.Items.Add("UDP");
-
-            // 读取上次保存的连接模式，默认 TCP
-            string savedMode = g_DicMESConfig["SOFTWARE"].ContainsKey("plcmode")
-                ? g_DicMESConfig["SOFTWARE"]["plcmode"] : "TCP";
-            _plcIsTcp = !string.Equals(savedMode, "UDP", StringComparison.OrdinalIgnoreCase);
-            uiComboBox1.SelectedIndex = _plcIsTcp ? 0 : 1;
-
-            uiComboBox1.SelectedIndexChanged += (s, ev) =>
-            {
-                bool newMode = uiComboBox1.SelectedIndex == 0; // 0=TCP, 1=UDP
-                if (newMode == _plcIsTcp) return; // 未变化
-
-                // 1. 停掉旧的 heartbeat / reconnect
-                try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
-
-                // 2. 断开旧连接，更新 UI 状态
-                PlcClose();
-                _plcIsTcp = newMode;
-                _plcReconnecting = true; // 临时阻止 SetPlcStatus 触发重连
-                SetPlcStatus(false);
-                _plcReconnecting = false;
-                AddLogMessage(_plcIsTcp ? "已切换为 TCP 模式，重新连接PLC..." : "已切换为 UDP 模式，重新连接PLC...", Color.Blue);
-
-                // 3. 持久化模式到 setting.ini
-                new ConfigService().SavePlcMode(_plcIsTcp ? "TCP" : "UDP");
-
-                // 4. 新建令牌 → 心跳 + 重连共用同一 CTS
-                StartHeartbeat();
-                _ = ReconnectPlc();
-            };
-        }
-
-        private async void ConnectToPlc()
-        {
-            try
-            {
-                string plcip = g_DicMESConfig["Setting"]["plcip"];
-                await Connect_PLC(plcip, uiLabel3).ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("PLC连接异常：" + ex.Message, Color.Red);
-                WriteLogs.WriteLog("PLC连接异常: " + ex);
-            }
-        }
-
-        /// <summary>
-        /// 异步连接 PLC：I/O 在线程池执行，避免阻塞 UI
-        /// </summary>
-        private async Task Connect_PLC(string plcip, UILabel uiLabel)
-        {
-            try
-            {
-                // 所有阻塞 I/O 放在后台线程
-                var (closeOk, connectOk, connectMsg, readOk) = await Task.Run(() =>
-                {
-                    PlcClose();
-                    var cr = PlcConnect(plcip, _plcPort);
-                    if (!cr.IsSuccess) return (true, false, cr.Message, false);
-                    var rd = PlcReadInt16(startscan);
-                    return (true, true, "", rd.IsSuccess);
-                });
-
-                if (!connectOk)
-                {
-                    uiLabel.Text = "未连接";
-                    uiLabel.BackColor = Color.Red;
-                    AddLogMessage($"PLC连接失败：{connectMsg}", Color.Red);
-                    return;
-                }
-                if (readOk)
-                {
-                    _plcConnected = true;
-                    uiLabel.Text = "已连接";
-                    uiLabel.BackColor = Color.DodgerBlue;
-                    AddLogMessage($"PLC连接成功（{(_plcIsTcp ? "TCP" : "UDP")}）", Color.Green);
-                }
-                else
-                {
-                    uiLabel.Text = "未连接";
-                    uiLabel.BackColor = Color.Red;
-                    AddLogMessage("PLC连接失败：读取D3000无响应", Color.Red);
-                }
-            }
-            catch
-            {
-                uiLabel.Text = "未连接";
-                uiLabel.BackColor = Color.Red;
-                AddLogMessage("PLC连接失败", Color.Red);
-            }
-        }
-
-        /// <summary>
-        /// 从配置读取扫码枪 IP/端口并建立连接
-        /// </summary>
-        private void ConnectToScanner()
-        {
-            _scanIp = g_DicMESConfig["Setting"]["scanip"];
-            _scanPort = int.Parse(g_DicMESConfig["Setting"]["scanport"]);
-            Connect_Scan(uiLabel5);
-        }
-
-        /// <summary>
-        /// 启动后台心跳任务，每 2 秒向 PLC 心跳地址 写入 1（不记日志）
-        /// </summary>
-        private void StartHeartbeat()
-        {
-            try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
-            _cts = new CancellationTokenSource();
-            var token = _cts.Token;
-            Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    if (_plcConnected)
-                    {
-                        try
-                        {
-                            if (_plcIsTcp)
-                                _plcTcp?.Write(_heartbeat, (short)1);
-                            else
-                                _plcUdp?.Write(_heartbeat, (short)1);
-                        }
-                        catch (Exception) { }
-                    }
-                    try
-                    {
-                        await Task.Delay(2000, token);
-                    }
-                    catch (TaskCanceledException) { break; }
-                }
-            }, token);
-        }
-
-        /// <summary>
-        /// 初始化 PLC 地址监听表格：三行 扫码启动 / MES结果 / 心跳
-        /// </summary>
-        private void InitPlcMonitorGrid()
-        {
-            uiDataGridView1.Rows.Clear();
-            uiDataGridView1.Rows.Add(startscan, startscan + " 扫码启动信号", "0");
-            uiDataGridView1.Rows.Add(mesresult, mesresult + " MES结果信号", "0");
-            uiDataGridView1.Rows.Add(_heartbeat, _heartbeat + "心跳信号", "0");
-        }
-
-        /// <summary>
-        /// 启动 PLC 地址监听定时器，每 500ms 读取一次值并刷新表格
-        /// </summary>
-        private void StartPlcMonitor()
-        {
-            _plcMonitorTimer = new System.Timers.Timer { Interval = 500, AutoReset = true };
-            _plcMonitorTimer.Elapsed += (s, ev) =>
-            {
-                // 防止重入：上一次读取还在阻塞中时跳过本轮
-                if (Interlocked.CompareExchange(ref _monitorBusy, 1, 0) != 0)
-                    return;
-
-                try
-                {
-                    if (!PlcConnected)
-                    {
-                        SetPlcStatus(false);
-                        return;
-                    }
-
-                    // D3000：读取值并刷新表格，同时处理扫码信号 + 超时
-                    var d3k = PlcReadInt16(startscan);
-                    bool d3000Ok = d3k.IsSuccess;
-                    if (!d3000Ok)
-                    {
-                        if (!_plcIsTcp)
-                        {
-                            // UDP 无连接，偶发丢包正常；连续失败 N 次才判定断开
-                            _plcReadFailCount++;
-                            if (_plcReadFailCount >= UdpFailThreshold)
-                            {
-                                _plcConnected = false;
-                                _plcReadFailCount = 0;
-                                SetPlcStatus(false);
-                                // 断开后跳过本轮，等待重连
-                                Interlocked.Exchange(ref _monitorBusy, 0);
-                                return;
-                            }
-                            // 未达阈值：跳过 D3000 信号处理（不更新 _prevD3000Value/_scanArmed），
-                            // 但仍刷新 mesresult/heartbeat，避免状态僵死导致下次误判
-                        }
-                        else
-                        {
-                            // TCP 面向连接，一次失败即断开
-                            _plcConnected = false;
-                            SetPlcStatus(false);
-                            Interlocked.Exchange(ref _monitorBusy, 0);
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        // 读取成功 → 清零连续失败计数
-                        _plcReadFailCount = 0;
-                    }
-
-                    if (d3000Ok)
-                    {
-                        UpdateMonitorCell(0, d3k.Content.ToString());
-                        short d3000Val = d3k.Content;
-
-                        // 仅当 startscanswitch=true 时才监听 D3000 扫码信号、发送 start 指令、检测超时
-                        if (_startScanSwitchEnabled)
-                        {
-                            if (d3000Val == 1)
-                            {
-                                bool isRisingEdge = _prevD3000Value != 1;
-                                bool started = false;
-
-                                if (isRisingEdge)
-                                {
-                                    ReloadConfig();
-                                    started = BeginScanCycle();
-                                    if (started)
-                                    {
-                                        AddLogMessage($"{startscan}=1 检测到扫码信号", Color.Blue);
-                                    }
-                                    else
-                                    {
-                                        AddLogMessage("扫码周期未结束，忽略重复D3000=1", Color.Orange);
-                                    }
-                                }
-
-                                Task.Run(() => PlcWrite(startscan, (short)0));
-                                BeginInvoke(new Action(() => AddLogMessage($"上位机写 [{startscan}] = 0", Color.Green)));
-
-                                if (started && _scanConnected && !string.IsNullOrEmpty(_startOrder))
-                                {
-                                    var order = _startOrder;
-                                    Task.Run(() => SendScannerStartOrder(order));
-                                }
-                            }
-                            _prevD3000Value = d3000Val;
-                        }
-                    }
-
-                    bool ok2 = RefreshPlcCell(1, mesresult);
-                    RefreshPlcCell(2, _heartbeat);
-                    SetPlcStatus(true);
-                }
-                catch (Exception ex)
-                {
-                    WriteLogs.WriteLog("PLC监控定时器异常: " + ex);
-                }
-                finally
-                {
-                    Interlocked.Exchange(ref _monitorBusy, 0);
-                }
-            };
-            _plcMonitorTimer.Start();
-        }
-
-        /// <summary>
-        /// 读取单个 PLC 地址并刷新监控表格对应行，返回是否读取成功
-        /// </summary>
-        private bool RefreshPlcCell(int rowIndex, string address)
-        {
-            try
-            {
-                var result = PlcReadInt16(address);
-                if (result.IsSuccess)
-                {
-                    UpdateMonitorCell(rowIndex, result.Content.ToString());
-                    return true;
-                }
-            }
-            catch (Exception) { }
-            return false;
-        }
-
-        /// <summary>
-        /// 更新 PLC 状态标签，并在从已连接变为未连接时触发自动重连
-        /// </summary>
-        private void SetPlcStatus(bool connected)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => SetPlcStatus(connected)));
-                return;
-            }
-            bool wasConnected = uiLabel3.Text == "已连接";
-            uiLabel3.Text = connected ? "已连接" : "未连接";
-            uiLabel3.BackColor = connected ? Color.DodgerBlue : Color.Red;
-            if (!connected && wasConnected && !_plcReconnecting)
-            {
-                AddLogMessage("检测到PLC已断开，开始重连", Color.Red);
-                _ = ReconnectPlc();
-            }
-        }
-
-        /// <summary>
-        /// PLC 重连：关闭旧连接 → 创建新客户端 → Open → 验证读取，
-        /// 最多 5 次，每次间隔 3 秒，窗体关闭时通过 _cts 取消
-        /// </summary>
-        private async Task ReconnectPlc()
-        {
-            if (_plcReconnecting) return;
-            try
-            {
-                _plcReconnecting = true;
-                _plcReadFailCount = 0;  // 重置连续失败计数
-                string plcip = g_DicMESConfig["Setting"]["plcip"];
-                var token = _cts?.Token ?? CancellationToken.None;
-
-                for (int i = 1; i <= 5; i++)
-                {
-                    if (token.IsCancellationRequested) break;
-                    try
-                    {
-                        AddLogMessage($"PLC重连第{i}/5次尝试...");
-                        var result = await Task.Run(() =>
-                        {
-                            PlcClose();
-                            PlcConnect(plcip, _plcPort);
-                            return PlcReadInt16(startscan);
-                        }, token);
-                        if (result.IsSuccess)
-                        {
-                            _plcConnected = true;
-                            _plcReconnecting = false;
-                            AddLogMessage($"PLC重连成功（第{i}次尝试）", Color.Green);
-                            SetPlcStatus(true);
-                            return;
-                        }
-                        AddLogMessage($"PLC重连第{i}次失败：{result.Message}", Color.Red);
-                    }
-                    catch (OperationCanceledException) { break; }
-                    catch (Exception ex)
-                    {
-                        AddLogMessage($"PLC重连第{i}次异常：{ex.Message}", Color.Red);
-                    }
-                    if (i < 5)
-                    {
-                        try { await Task.Delay(3000, token); }
-                        catch (TaskCanceledException) { break; }
-                    }
-                }
-                _plcReconnecting = false;
-                AddLogMessage("PLC重连失败，已尝试5次，请重启软件", Color.Red);
-                SetPlcStatus(false);
-            }
-            catch (Exception ex)
-            {
-                _plcReconnecting = false;
-                WriteLogs.WriteLog("PLC重连未预期异常: " + ex);
-            }
-        }
-
-        private void UpdateMonitorCell(int rowIndex, string value)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => UpdateMonitorCell(rowIndex, value)));
-                return;
-            }
-            if (uiDataGridView1.Rows.Count > rowIndex)
-            {
-                uiDataGridView1.Rows[rowIndex].Cells[2].Value = value;
-            }
+            bool.TryParse(g_DicMESConfig["SOFTWARE"]["laststation"], out _lastStationEnabled);
         }
 
         /// <summary>
@@ -715,19 +225,8 @@ namespace WindowsFormsApp
         /// </summary>
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
-            try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
-            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
-            try { _scanTimeoutCts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
-            _plcMonitorTimer?.Stop();
-            _plcMonitorTimer?.Dispose();
-            _scanHealthTimer?.Stop();
-            _scanHealthTimer?.Dispose();
-            try { PlcClose(); } catch (Exception) { }
-            try { scanclient?.Disconnect(); } catch (Exception) { }
-            try { scanclient?.Dispose(); } catch (Exception) { }
         }
 
         // ============================================================
@@ -759,10 +258,62 @@ namespace WindowsFormsApp
             }
             AddLogMessage($"SFC规则校验成功：SFC = {sfcValue}", Color.Green);
 
+            // [上一工站过站] 受 laststation 开关控制
+            if (_lastStationEnabled)
+            {
+                string stationId = g_DicMESConfig["Config"]["StationID"];
+                bool gotPrev = FormHelper.GetAboutStationByStationId(
+                    _mesUrl, _loginId, _clientId, stationId,
+                    out string prevName, out string prevId, out string prevMsg);
+                if (!gotPrev)
+                {
+                    AddLogMessage($"获取上一工站失败：{prevMsg}", Color.Red);
+                    MarkFail();
+                    return false;
+                }
+                AddLogMessage($"上一工站：{prevName} (ID={prevId})", Color.Blue);
+
+                // 上一工站胶水校验
+                if (_glueCheckEnabled && !ValidateGlueStock())
+                {
+                    MarkFail();
+                    return false;
+                }
+                // 上一工站小件校验
+                if (!ValidatePartsBeforePass())
+                {
+                    AddLogMessage("上一工站小件校验失败", Color.Red);
+                    MarkFail();
+                    return false;
+                }
+                // 上一工站 Start
+                string shopOrder = g_DicMESConfig["Config"]["SapShoporder"];
+                string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
+                if (!FormHelper.Start(_mesUrl, _loginId, _clientId, sfcValue, prevName,
+                    g_DicMESConfig["Config"]["Line"], shopOrder, schedulingId, out string startMsg))
+                {
+                    AddLogMessage($"上一工站 Start 失败：{startMsg}，跳过继续当前工站", Color.Orange);
+                }
+                else
+                {
+                    AddLogMessage($"上一工站 Start 成功（{prevName}）", Color.Green);
+                    // 上一工站 Complete
+                    string remark = g_DicMESConfig["Config"].ContainsKey("Remark")
+                        ? g_DicMESConfig["Config"]["Remark"] : "";
+                    if (!FormHelper.Complete(_mesUrl, _loginId, _clientId, sfcValue, prevId,
+                        schedulingId, remark, out string cplMsg))
+                    {
+                        AddLogMessage($"上一工站 Complete 失败：{cplMsg}", Color.Red);
+                        MarkFail();
+                        return false;
+                    }
+                    AddLogMessage($"上一工站 Complete 成功（ID={prevId}）", Color.Green);
+                }
+            }
+
             // 第二步：胶水库存校验（GetAuxmStockList）
             if (!ValidateGlueStock())
             {
-                Task.Run(() => PlcWrite(mesresult, 11)); AddLogMessage($"上位机写 [{mesresult}] = 11", Color.Green);
                 MarkFail();
                 return false;
             }
@@ -770,7 +321,6 @@ namespace WindowsFormsApp
             // 第三步：小件绑定及数量校验
             if (!ValidatePartsBeforePass())
             {
-                Task.Run(() => PlcWrite(mesresult, 12)); AddLogMessage($"上位机写 [{mesresult}] = 12", Color.Red);
                 AddLogMessage("过站前小件信息校验失败", Color.Red);
                 MarkFail();
                 return false;
@@ -780,7 +330,6 @@ namespace WindowsFormsApp
             // 第四步：MES Start（产品入站）
             if (!Start(sfcValue))
             {
-                Task.Run(() => PlcWrite(mesresult, 14)); AddLogMessage($"上位机写 [{mesresult}] = 14", Color.Red);
                 AddLogMessage("Start失败", Color.Red);
                 MarkFail();
                 return false;
@@ -821,7 +370,6 @@ namespace WindowsFormsApp
                 MarkFail();
                 return false;
             }
-            Task.Run(() => PlcWrite(mesresult, 27)); AddLogMessage($"上位机写 [{mesresult}] = 27", Color.Green);
             AddLogMessage("Complete成功", Color.Green);
             _passCount++;
             SaveCounters();
@@ -1290,303 +838,6 @@ namespace WindowsFormsApp
         }
 
         // ============================================================
-        // 设备连接
-        // ============================================================
-
-        /// <summary>
-
-        /// <summary>
-        /// 创建 SimpleTcpClient 连接扫码枪，注册 DataReceived 回调，更新状态标签
-        /// </summary>
-        private void Connect_Scan(UILabel uiLabel)
-        {
-            scanclient?.Disconnect();
-            scanclient = new SimpleTcpClient
-            {
-                StringEncoder = Encoding.UTF8,
-                Delimiter = Encoding.UTF8.GetBytes("\r")[0]
-            };
-            scanclient.DataReceived += scanclient_DataReceived;
-            try
-            {
-                scanclient.Connect(_scanIp, _scanPort);
-                _scanConnected = true;
-                uiLabel.Text = "已连接";
-                uiLabel.BackColor = Color.DodgerBlue;
-                AddLogMessage("扫码枪连接成功", Color.Green);
-            }
-            catch
-            {
-                _scanConnected = false;
-                uiLabel.Text = "未连接";
-                uiLabel.BackColor = Color.Red;
-                AddLogMessage("扫码枪连接失败", Color.Red);
-            }
-        }
-
-        /// <summary>
-        /// 启动扫码枪健康检查定时器：每 3 秒探测一次，
-        /// 若当前未连接且端口可达则触发重连
-        /// </summary>
-        private void StartScanHealthCheck()
-        {
-            _scanHealthTimer = new System.Windows.Forms.Timer { Interval = 3000 };
-            _scanHealthTimer.Tick += (s, ev) =>
-            {
-                if (_scanReconnecting) return;
-
-                bool reachable = ProbeScanner();
-                if (_scanConnected)
-                {
-                    // 已连接但端口不可达 → 标记断开，下次 tick 自动重连
-                    if (!reachable)
-                    {
-                        SetScanStatus(false);
-                        AddLogMessage("扫码枪连接已断开", Color.Orange);
-                    }
-                    return;
-                }
-
-                if (reachable)
-                {
-                    AddLogMessage("检测到扫码枪端口可达，开始重连");
-                    _ = ReconnectScanner();
-                }
-            };
-            _scanHealthTimer.Start();
-        }
-
-        /// <summary>
-        /// 用短超时 TcpClient 探测扫码枪端口是否可达，
-        /// 使用独立连接，不干扰 SimpleTCP 主连接
-        /// </summary>
-        private bool BeginScanCycle()
-        {
-            lock (_scanCycleLock)
-            {
-                if (_scanCycleActive)
-                    return false;
-
-                _scanCycleActive = true;
-                _scanArmed = true;
-                _scanArmedTime = DateTime.Now;
-            }
-
-            StartScanTimeoutWatch();
-            return true;
-        }
-
-        private bool TryConsumeScanCycle()
-        {
-            lock (_scanCycleLock)
-            {
-                if (!_scanCycleActive)
-                    return false;
-
-                _scanCycleActive = false;
-                _scanArmed = false;
-            }
-
-            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
-            return true;
-        }
-
-        private void StartScanTimeoutWatch()
-        {
-            try { _scanTimeoutCts?.Cancel(); } catch (ObjectDisposedException) { }
-            try { _scanTimeoutCts?.Dispose(); } catch (ObjectDisposedException) { }
-
-            _scanTimeoutCts = new CancellationTokenSource();
-            var token = _scanTimeoutCts.Token;
-            double waitSeconds = timeout > 0 ? timeout : 2.0;
-
-            Task.Run(async () =>
-            {
-                try
-                {
-                    double elapsed = 0;
-                    const double retryInterval = 0.5;
-
-                    while (elapsed < waitSeconds)
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(retryInterval), token);
-                        elapsed += retryInterval;
-
-                        bool cycleActive;
-                        lock (_scanCycleLock)
-                        {
-                            cycleActive = _scanCycleActive;
-                        }
-
-                        if (!cycleActive)
-                            return; // 扫码数据已收到，正常退出
-
-                        // 重发 start 指令
-                        if (_scanConnected && !string.IsNullOrEmpty(_startOrder))
-                        {
-                            SendScannerStartOrder(_startOrder);
-                        }
-                    }
-
-                    // 超时：扫码周期仍未结束
-                    lock (_scanCycleLock)
-                    {
-                        if (!_scanCycleActive)
-                            return;
-
-                        _scanCycleActive = false;
-                        _scanArmed = false;
-                    }
-
-                    var writeResult = PlcWrite(mesresult, 13);
-                    BeginInvoke(new Action(() =>
-                    {
-                        AddLogMessage($"扫码超时：超过 {waitSeconds:F1}秒 未收到扫码数据", Color.Red);
-                        AddLogMessage($"上位机写 [{mesresult}] = 13" + (writeResult.IsSuccess ? "" : " 失败：" + writeResult.Message), writeResult.IsSuccess ? Color.Green : Color.Red);
-                        MarkFail();
-                    }));
-                }
-                catch (TaskCanceledException) { }
-                catch (ObjectDisposedException) { }
-                catch (Exception ex)
-                {
-                    WriteLogs.WriteLog("扫码超时任务异常: " + ex);
-                }
-            });
-        }
-
-        private bool SendScannerStartOrder(string order)
-        {
-            try
-            {
-                var client = scanclient;
-                if (client == null)
-                    throw new InvalidOperationException("扫码枪客户端未初始化");
-
-                client.Write(order);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                BeginInvoke(new Action(() =>
-                {
-                    AddLogMessage("发送startorder失败：" + ex.Message, Color.Red);
-                    SetScanStatus(false);
-                }));
-                if (!_scanReconnecting)
-                    _ = ReconnectScanner();
-                return false;
-            }
-        }
-
-        private bool ProbeScanner()
-        {
-            try
-            {
-                using (var client = new System.Net.Sockets.TcpClient())
-                {
-                    var ar = client.BeginConnect(_scanIp, _scanPort, null, null);
-                    bool connected = ar.AsyncWaitHandle.WaitOne(1000);
-                    // 无论成功与否都必须调用 EndConnect，否则 AsyncWaitHandle 泄漏
-                    try { client.EndConnect(ar); } catch { }
-                    if (connected && client.Connected)
-                        return true;
-                }
-            }
-            catch (Exception) { }
-            return false;
-        }
-
-        /// <summary>
-        /// 扫码枪重连：断开旧连接 → 创建新客户端 → 重订阅事件 → 尝试连接，
-        /// 最多 5 次，每次间隔 3 秒，窗体关闭时通过 _cts 取消
-        /// </summary>
-        private async Task ReconnectScanner()
-        {
-            _scanReconnecting = true;
-            var token = _cts?.Token ?? CancellationToken.None;
-
-            for (int i = 1; i <= 5; i++)
-            {
-                if (token.IsCancellationRequested) break;
-                try
-                {
-                    try { scanclient?.Disconnect(); } catch (Exception) { }
-                    try { scanclient?.Dispose(); } catch (Exception) { }
-                    scanclient = new SimpleTcpClient
-                    {
-                        StringEncoder = Encoding.UTF8,
-                        Delimiter = Encoding.UTF8.GetBytes("\r")[0]
-                    };
-                    scanclient.DataReceived += scanclient_DataReceived;
-                    scanclient.Connect(_scanIp, _scanPort);
-                    _scanReconnecting = false;
-                    AddLogMessage($"扫码枪重连成功（第{i}次尝试）", Color.Green);
-                    SetScanStatus(true);
-                    return;
-                }
-                catch (Exception) { }
-                if (i < 5)
-                {
-                    try { await Task.Delay(3000, token); }
-                    catch (TaskCanceledException) { break; }
-                }
-            }
-
-            _scanReconnecting = false;
-            AddLogMessage("扫码枪重连失败，已尝试5次", Color.Red);
-            SetScanStatus(false);
-        }
-
-        /// <summary>
-        /// 更新扫码枪状态标签和内部状态（线程安全）
-        /// </summary>
-        private void SetScanStatus(bool connected)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => SetScanStatus(connected)));
-                return;
-            }
-            _scanConnected = connected;
-            uiLabel5.Text = connected ? "已连接" : "未连接";
-            uiLabel5.BackColor = connected ? Color.DodgerBlue : Color.Red;
-        }
-
-        /// <summary>
-        /// 扫码枪数据接收回调（TCP 子线程）：
-        /// 清洗条码 → 投递到 UI 线程 → 判断当前 Tab → 填入对应文本框
-        /// </summary>
-        private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
-        {
-            // 清洗条码：去掉回车、换行、空格
-            string sfc = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
-
-            if (this.InvokeRequired)
-            {
-                // UI 线程：信号验证 + UI 更新（轻量操作，不阻塞）
-                this.BeginInvoke(new Action(() =>
-                {
-                    if (_startScanSwitchEnabled)
-                    {
-                        if (!TryConsumeScanCycle())
-                        {
-                            AddLogMessage("未处于扫码周期，忽略本次扫码", Color.Red);
-                            SFC_UITextBox.Text = "";
-                            return;
-                        }
-                    }
-
-                    SFC_UITextBox.Text = sfc;
-
-                    // 后台线程：MES 通信（HTTP 请求，不阻塞 UI 线程和定时器）
-                    Task.Run(() => ruleSFC(sfc));
-                }));
-
-            }
-        }
-
-        // ============================================================
         // 小件数据管理
         // ============================================================
 
@@ -1923,8 +1174,6 @@ namespace WindowsFormsApp
 
                 {
                     AddLogMessage($"[{bydpn}] 位置 {location} 剩余 {result.QtyResidual}（停机数量 {stopQty}），小件数量不足，请及时上料！", Color.Red);
-                    Task.Run(() => PlcWrite("D3056", (short)1));
-                    BeginInvoke(new Action(() => AddLogMessage("上位机写 [D3056] = 1", Color.Green)));
                 }
                 else
                 {
@@ -2475,7 +1724,6 @@ namespace WindowsFormsApp
             if (result.QtyResidual <= stopQty)
             {
                 AddLogMessage($"[{bydpn}] 位置 {location} 上料后剩余 {result.QtyResidual} ≤ 停机数量 {stopQty}，小件数量不足，请及时上料！", Color.Red);
-                Task.Run(() => PlcWrite("D3056", (short)1));
             }
             else
             {
