@@ -171,10 +171,31 @@ namespace WindowsFormsApp
             SaveCounters();
             if (this.InvokeRequired)
             {
-                this.BeginInvoke(new Action(() => FailCount.Text = _failCount.ToString()));
+                this.BeginInvoke(new Action(() =>
+                {
+                    FailCount.Text = _failCount.ToString();
+                    uiLabel2.Text = "FAIL";
+                    uiLabel2.BackColor = Color.Red;
+                }));
                 return;
             }
             FailCount.Text = _failCount.ToString();
+            uiLabel2.Text = "FAIL";
+            uiLabel2.BackColor = Color.Red;
+        }
+
+        /// <summary>
+        /// 设置过站结果标签为 PASS（绿色背景白色字体）
+        /// </summary>
+        private void SetPassLabel()
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(SetPassLabel));
+                return;
+            }
+            uiLabel2.Text = "PASS";
+            uiLabel2.BackColor = Color.Green;
         }
 
         /// <summary>
@@ -248,6 +269,8 @@ namespace WindowsFormsApp
         private bool ruleSFC(string sfcValue)
         {
             sfcValue = sfcValue.Trim();
+            // 清空结果标签
+            BeginInvoke(new Action(() => { uiLabel2.Text = ""; }));
             // 第一步：SFC 规则校验
             if (!ValidateSFC(sfcValue, SFCRule))
             {
@@ -373,6 +396,7 @@ namespace WindowsFormsApp
             AddLogMessage("Complete成功", Color.Green);
             _passCount++;
             SaveCounters();
+            SetPassLabel();
             if (this.InvokeRequired)
             {
                 this.BeginInvoke(new Action(() => PassCount.Text = _passCount.ToString()));

@@ -61,6 +61,7 @@
             this.dataGridViewParts = new Sunny.UI.UIDataGridView();
             this.txtInputCode = new Sunny.UI.UITextBox();
             this.uiLabel12 = new Sunny.UI.UILabel();
+            this.uiLabel2 = new Sunny.UI.UILabel();
             this.uiTabControl1.SuspendLayout();
             this.pageScan.SuspendLayout();
             this.uiPanel1.SuspendLayout();
@@ -100,6 +101,7 @@
             // pageScan
             // 
             this.pageScan.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(243)))), ((int)(((byte)(249)))), ((int)(((byte)(255)))));
+            this.pageScan.Controls.Add(this.uiLabel2);
             this.pageScan.Controls.Add(this.ConfigCombox);
             this.pageScan.Controls.Add(this.uiLabel7);
             this.pageScan.Controls.Add(this.uiRichTextBox1);
@@ -149,13 +151,13 @@
             this.uiRichTextBox1.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
             this.uiRichTextBox1.FillColor = System.Drawing.Color.White;
             this.uiRichTextBox1.Font = new System.Drawing.Font("宋体", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.uiRichTextBox1.Location = new System.Drawing.Point(14, 82);
+            this.uiRichTextBox1.Location = new System.Drawing.Point(14, 246);
             this.uiRichTextBox1.Margin = new System.Windows.Forms.Padding(4, 5, 4, 5);
             this.uiRichTextBox1.MinimumSize = new System.Drawing.Size(1, 1);
             this.uiRichTextBox1.Name = "uiRichTextBox1";
             this.uiRichTextBox1.Padding = new System.Windows.Forms.Padding(2);
             this.uiRichTextBox1.ShowText = false;
-            this.uiRichTextBox1.Size = new System.Drawing.Size(784, 328);
+            this.uiRichTextBox1.Size = new System.Drawing.Size(784, 164);
             this.uiRichTextBox1.TabIndex = 3;
             this.uiRichTextBox1.TextAlignment = System.Drawing.ContentAlignment.MiddleCenter;
             // 
@@ -522,6 +524,19 @@
             this.uiLabel12.Text = "小件码:";
             this.uiLabel12.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
             // 
+            // uiLabel2
+            // 
+            this.uiLabel2.Anchor = System.Windows.Forms.AnchorStyles.None;
+            this.uiLabel2.BackColor = System.Drawing.Color.DodgerBlue;
+            this.uiLabel2.Font = new System.Drawing.Font("宋体", 72F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.uiLabel2.ForeColor = System.Drawing.Color.White;
+            this.uiLabel2.Location = new System.Drawing.Point(11, 94);
+            this.uiLabel2.Name = "uiLabel2";
+            this.uiLabel2.Size = new System.Drawing.Size(787, 147);
+            this.uiLabel2.TabIndex = 10;
+            this.uiLabel2.Text = "";
+            this.uiLabel2.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            // 
             // MainForm
             // 
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.None;
@@ -543,6 +558,8 @@
             ((System.ComponentModel.ISupportInitialize)(this.dataGridViewParts)).EndInit();
             this.ResumeLayout(false);
         }
+
+        private Sunny.UI.UILabel uiLabel2;
 
         #endregion
 
