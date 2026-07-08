@@ -33,12 +33,6 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="HslCommunication, Version=12.8.3.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\HslCommunication.12.8.3\lib\net451\HslCommunication.dll</HintPath>
-    </Reference>
-    <Reference Include="IoTClient, Version=1.0.44.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\IoTClient.1.0.44\lib\netstandard2.0\IoTClient.dll</HintPath>
-    </Reference>
     <Reference Include="JSON_RW_DLL, Version=1.0.5.4, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>bin\Debug\JSON_RW_DLL.dll</HintPath>
@@ -49,9 +43,6 @@
     <Reference Include="ReadWriteLogIni, Version=1.0.0.2, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>bin\Debug\ReadWriteLogIni.dll</HintPath>
-    </Reference>
-    <Reference Include="SimpleTCP, Version=1.0.24.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\SimpleTCP.1.0.24\lib\net45\SimpleTCP.dll</HintPath>
     </Reference>
     <Reference Include="SunnyUI">
       <HintPath>bin\Debug\SunnyUI.dll</HintPath>
@@ -65,9 +56,6 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Design" />
-    <Reference Include="System.IO.Ports, Version=10.0.0.7, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
-      <HintPath>..\packages\System.IO.Ports.10.0.7\lib\net462\System.IO.Ports.dll</HintPath>
-    </Reference>
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
