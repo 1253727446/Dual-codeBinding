@@ -30,8 +30,6 @@ namespace WindowsFormsApp
         // ========== 小件数据相关字段 ==========
         /// <summary>承载表格数据的 DataTable，直接绑定到 DataGridView</summary>
         private DataTable _partsTable;
-        /// <summary>小件数据本地持久化路径</summary>
-        private readonly string _xmlPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "parts-data.xml");
         /// <summary>过站计数器持久化路径</summary>
         private readonly string _countersPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "counters.json");
         /// <summary>所有小件定义（从 MES 接口获取）</summary>
@@ -92,7 +90,7 @@ namespace WindowsFormsApp
             CacheConfig();               // 缓存 MES 接口 URL / LoginID / ClientID
             InitSettings();              // 读取胶水校验等软件配置
             GetCustomData();             // 从 MES 获取 SFC 条码匹配规则
-            LoadOrCreateTable();         // 从本地 XML 恢复或从 MES 拉取小件表格
+            LoadPartsFromApi();          // 从 MES 接口拉取小件表格
             BindGrid();                  // 小件 DataTable 绑定到 DataGridView
             LoadCounters();              // 从 counters.json 恢复过站计数器
             StartShiftTimer();           // 启动换班检查定时器（8:00 / 20:00）
@@ -760,7 +758,6 @@ namespace WindowsFormsApp
                     double deduct = Convert.ToDouble(row[ColumnQty]);
                     row[ColumnRemaining] = Math.Max(0.0, remaining - deduct);
                 }
-                SaveTable();
 
                 return true;
             }
@@ -917,220 +914,57 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 启动时：始终先调接口获取最新小件定义，与本地 XML 比对后按规则合并
+        /// 启动时从 MES 接口拉取小件定义和剩余数量
         /// </summary>
-        private void LoadOrCreateTable()
+        private void LoadPartsFromApi()
         {
             _partsTable = new DataTable("Parts");
-            CreateTableSchema();
+            _partsTable.Columns.Add(ColumnBydpn, typeof(string));
+            _partsTable.Columns.Add(ColumnDid, typeof(string));
+            _partsTable.Columns.Add(ColumnRemarks, typeof(double));
+            _partsTable.Columns.Add(ColumnRemaining, typeof(double));
+            _partsTable.Columns.Add(ColumnQty, typeof(double));
+            _partsTable.Columns.Add(ColumnDidRule, typeof(string));
+            _partsTable.Columns.Add(ColumnLocation, typeof(string));
+            _partsTable.Columns.Add(ColumnMinSurplus, typeof(int));
+            _partsTable.Columns.Add(ColumnStopQty, typeof(string));
+            _partsTable.Columns.Add(ColumnClientNo, typeof(string));
 
-            string StationName = g_DicMESConfig["Config"]["Operation"];
+            string stationName = g_DicMESConfig["Config"]["Operation"];
             string loadId = g_DicMESConfig["Config"]["Load_ID"];
 
-            // 1. 尝试调接口获取最新小件定义
             List<SubMaterialDef> apiDefs = null;
-            bool apiOk = false;
             try
             {
-                apiDefs = FormHelper.GetLoadSubsByLoadId(_mesUrl, _loginId, _clientId, loadId, StationName);
-                apiOk = true;
+                apiDefs = FormHelper.GetLoadSubsByLoadId(_mesUrl, _loginId, _clientId, loadId, stationName);
                 _allSubDefs = apiDefs ?? new List<SubMaterialDef>();
             }
             catch (Exception ex)
             {
-                AddLogMessage("启动时获取小件定义失败：" + ex.Message, Color.Red);
-            }
-
-            // 2. 接口成功
-            if (apiOk && apiDefs != null)
-            {
-                if (File.Exists(_xmlPath))
-                {
-                    // 加载本地 XML 到临时表
-                    var localTable = new DataTable("Parts");
-                    try { localTable.ReadXml(_xmlPath); }
-                    catch (Exception ex)
-                    {
-                        AddLogMessage("读取本地小件XML失败：" + ex.Message, Color.Red);
-                    }
-
-                    // 比对合并
-                    MergeFromApi(apiDefs, localTable);
-                }
-                else
-                {
-                    // 无本地文件 → 首次运行，直接从接口填充
-                    PopulateFromApiDefs(apiDefs);
-                    SaveTable();
-                    AddLogMessage("首次运行：已从接口获取小件数据并保存到本地。", Color.Green);
-                }
-
-                // 逐个调用 GetLoadUpByParams 更新剩余数量
-                FetchAndUpdateQtyResiduals();
+                AddLogMessage("获取小件定义失败：" + ex.Message, Color.Red);
                 return;
             }
 
-            // 3. 接口失败 → 兜底用本地 XML
-            if (File.Exists(_xmlPath))
+            if (apiDefs == null || apiDefs.Count == 0)
             {
-                try
-                {
-                    _partsTable.ReadXml(_xmlPath);
-                    EnsureRequiredColumns();
-                    AddLogMessage("接口获取失败，使用本地缓存的小件数据。", Color.Orange);
-                }
-                catch (Exception ex)
-                {
-                    AddLogMessage("读取本地小件XML失败：" + ex.Message, Color.Red);
-                }
-            }
-            else
-            {
-                AddLogMessage("无法获取小件数据：接口不可达且无本地缓存。", Color.Red);
-                SetStatus("小件数据加载失败");
-            }
-        }
-
-        /// <summary>
-        /// 以接口返回的 apiDefs 为准，与本地 localTable 逐条比对合并：
-        /// - bydpn 相同 + DidRule/Remarks 都未变 → 保留 Did
-        /// - bydpn 相同 + DidRule/Remarks 有变化 → 清空 Did
-        /// - 仅接口有 → 新行，Did 为空
-        /// - 仅本地有 → 移除
-        /// </summary>
-        private void MergeFromApi(List<SubMaterialDef> apiDefs, DataTable localTable)
-        {
-            // 先检查是否完全一致（条目数 + bydpn + DidRule 全部相同）
-            bool fullyConsistent = true;
-            if (apiDefs.Count != localTable.Rows.Count)
-            {
-                fullyConsistent = false;
-            }
-            else
-            {
-                foreach (var def in apiDefs)
-                {
-                    var localRows = localTable.Select($"Bydpn = '{def.Bydpn.Replace("'", "''")}'");
-                    if (localRows.Length != 1)
-                    {
-                        fullyConsistent = false;
-                        break;
-                    }
-                    var localDidRule = Convert.ToString(localRows[0][ColumnDidRule]) ?? "";
-                    if (!string.Equals(def.DidRule?.Trim(), localDidRule.Trim(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        fullyConsistent = false;
-                        break;
-                    }
-                }
-            }
-
-            if (fullyConsistent)
-            {
-                // 完全一致：直接使用本地数据，不写不覆盖
-                _partsTable = localTable;
-                _partsTable.TableName = "Parts";
-                EnsureRequiredColumns();
-                AddLogMessage("小件信息一致，无需更新。", Color.Green);
+                AddLogMessage("接口返回小件定义为空", Color.Red);
                 return;
             }
 
-            // 不一致 → 合并
-            int keptCount = 0, clearedCount = 0, addedCount = 0, removedCount = 0;
-
-            _partsTable.Rows.Clear();
-
-            foreach (var def in apiDefs)
+            foreach (var item in apiDefs)
             {
-                var localRows = localTable.Select($"Bydpn = '{def.Bydpn.Replace("'", "''")}'");
-
-                if (localRows.Length == 1)
-                {
-                    var localRow = localRows[0];
-                    var localDidRule = Convert.ToString(localRow[ColumnDidRule]) ?? "";
-                    var localRemarks = Convert.ToDouble(localRow[ColumnRemarks]);
-                    double apiRemarks;
-                    double.TryParse(def.Remarks ?? "0", out apiRemarks);
-
-                    bool ruleSame = string.Equals(def.DidRule?.Trim(), localDidRule.Trim(), StringComparison.OrdinalIgnoreCase);
-                    bool remarksSame = Math.Abs(localRemarks - apiRemarks) < 0.001;
-
-                    if (ruleSame && remarksSame)
-                    {
-                        // 保留本地行（含 Did 绑定），但更新可能变化的字段
-                        var did = Convert.ToString(localRow[ColumnDid]) ?? "";
-                        double remaining = Convert.ToDouble(localRow[ColumnRemaining]);
-                        _partsTable.Rows.Add(
-                            def.Bydpn, did, def.Remarks, remaining, def.Qty,
-                            def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
-                        keptCount++;
-                    }
-                    else
-                    {
-                        // 规则或数量变了 → 清空 Did
-                        string reason = "";
-                        if (!ruleSame) reason += "规则变更";
-                        if (!remarksSame) reason += (reason.Length > 0 ? "、" : "") + "数量变更";
-                        AddLogMessage($"[{def.Bydpn}] {reason}，已清空绑定的小件码。", Color.Orange);
-                        _partsTable.Rows.Add(
-                            def.Bydpn, "", def.Remarks, def.Remarks, def.Qty,
-                            def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
-                        clearedCount++;
-                    }
-                }
-                else
-                {
-                    // 接口新增的小件
-                    _partsTable.Rows.Add(
-                        def.Bydpn, "", def.Remarks, def.Remarks, def.Qty,
-                        def.DidRule, def.Location, def.MinSurplus, def.StopQty, def.ClientNo);
-                    AddLogMessage($"[{def.Bydpn}] 接口新增小件，需重新绑定。", Color.Blue);
-                    addedCount++;
-                }
+                _partsTable.Rows.Add(item.Bydpn, "", item.Remarks, item.Remarks, item.Qty,
+                    item.DidRule, item.Location, item.MinSurplus, item.StopQty, item.ClientNo);
             }
+            AddLogMessage($"已从接口加载 {apiDefs.Count} 个小件定义", Color.Green);
 
-            // 统计被删除的（本地有、接口无）
-            foreach (DataRow localRow in localTable.Rows)
-            {
-                var localBydpn = Convert.ToString(localRow[ColumnBydpn]) ?? "";
-                if (!apiDefs.Any(d => string.Equals(d.Bydpn, localBydpn, StringComparison.OrdinalIgnoreCase)))
-                {
-                    var did = Convert.ToString(localRow[ColumnDid]) ?? "";
-                    AddLogMessage($"[{localBydpn}] 接口已删除此小件" + (string.IsNullOrWhiteSpace(did) ? "" : $"，绑定码 {did} 已失效") + "。", Color.Orange);
-                    removedCount++;
-                }
-            }
-
-            SaveTable();
-            AddLogMessage($"小件合并完成：保留 {keptCount} | 规则/数量变更清空 {clearedCount} | 新增 {addedCount} | 删除 {removedCount}", Color.Green);
+            // 逐条获取剩余数量和 Did
+            FetchAndUpdateQtyResiduals();
         }
 
         /// <summary>
-        /// 从接口定义列表直接填充 _partsTable（不比对本地）
-        /// </summary>
-        private void PopulateFromApiDefs(List<SubMaterialDef> defs)
-        {
-            _partsTable.Rows.Clear();
-            foreach (var item in defs)
-            {
-                _partsTable.Rows.Add(
-                    item.Bydpn,
-                    item.Did,
-                    item.Remarks,
-                    item.Remarks,
-                    item.Qty,
-                    item.DidRule,
-                    item.Location,
-                    item.MinSurplus,
-                    item.StopQty,
-                    item.ClientNo
-                );
-            }
-        }
-
-        /// <summary>
-        /// 逐个调用 GetLoadUpByParams 获取每个小件的最新剩余数量，
-        /// 覆盖本地剩余数量，并在数量不足时告警
+        /// 逐个调用 GetLoadUpByParams 获取每个小件的最新剩余数量和 Did，
+        /// 覆盖内存数据，并在数量不足时告警
         /// </summary>
         private void FetchAndUpdateQtyResiduals()
         {
@@ -1163,7 +997,6 @@ namespace WindowsFormsApp
 
                 if (!string.IsNullOrEmpty(result.FailMessage))
                 {
-                    // RESULT=FAIL → 立即停止
                     AddLogMessage($"接口返回失败：{result.FailMessage}", Color.Red);
                     stopped = true;
                     break;
@@ -1171,7 +1004,6 @@ namespace WindowsFormsApp
 
                 if (!result.Found)
                 {
-                    // LoadUps 为空 → 清空本地 Did 和剩余数量，仅告警，不写 PLC
                     string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
                     double oldRemaining = Convert.ToDouble(row[ColumnRemaining]);
                     if (!string.IsNullOrWhiteSpace(oldDid) || oldRemaining > 0)
@@ -1184,7 +1016,6 @@ namespace WindowsFormsApp
                     continue;
                 }
 
-                // 更新剩余数量；接口返回 Did 与本地不一致时用接口值覆盖（含清空）
                 row[ColumnRemaining] = result.QtyResidual;
                 string localDid = Convert.ToString(row[ColumnDid]) ?? "";
                 string apiDid = result.Did ?? "";
@@ -1205,7 +1036,6 @@ namespace WindowsFormsApp
                 updatedCount++;
 
                 if (result.QtyResidual <= stopQty)
-
                 {
                     AddLogMessage($"[{bydpn}] 位置 {location} 剩余 {result.QtyResidual}（停机数量 {stopQty}），小件数量不足，请及时上料！", Color.Red);
                 }
@@ -1217,73 +1047,12 @@ namespace WindowsFormsApp
 
             if (!stopped)
             {
-                SaveTable();
                 AddLogMessage($"剩余数量更新完成：共更新 {updatedCount} 个小件。", Color.Green);
             }
             else
             {
                 AddLogMessage("因接口返回失败，已停止剩余数量更新流程。", Color.Red);
             }
-        }
-
-        /// <summary>
-        /// 如果 XML 文件列结构不完整（如旧版本文件），补齐必需列
-        /// </summary>
-        private void EnsureRequiredColumns()
-        {
-            AddColumnIfMissing(ColumnBydpn, typeof(string));
-            AddColumnIfMissing(ColumnDid, typeof(string));
-            AddColumnIfMissing(ColumnRemarks, typeof(double));
-            AddColumnIfMissing(ColumnRemaining, typeof(double));
-            AddColumnIfMissing(ColumnQty, typeof(double));
-            AddColumnIfMissing(ColumnDidRule, typeof(string));
-            AddColumnIfMissing(ColumnLocation, typeof(string));
-            AddColumnIfMissing(ColumnMinSurplus, typeof(int));
-            AddColumnIfMissing(ColumnStopQty, typeof(string));
-            AddColumnIfMissing(ColumnClientNo, typeof(string));
-        }
-
-        /// <summary>
-        /// 如果指定列不存在则添加到 DataTable
-        /// </summary>
-        private void AddColumnIfMissing(string columnName, Type type)
-        {
-            if (!_partsTable.Columns.Contains(columnName))
-            {
-                _partsTable.Columns.Add(columnName, type);
-            }
-        }
-
-        /// <summary>
-        /// DataTable 数据每次变更后立即写回本地 XML
-        /// </summary>
-        private void SaveTable()
-        {
-            try
-            {
-                _partsTable.WriteXml(_xmlPath, XmlWriteMode.WriteSchema);
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("保存小件XML失败：" + ex.Message, Color.Red);
-            }
-        }
-
-        /// <summary>
-        /// 创建 DataTable 的列结构（5 列）
-        /// </summary>
-        private void CreateTableSchema()
-        {
-            _partsTable.Columns.Add(ColumnBydpn, typeof(string));
-            _partsTable.Columns.Add(ColumnDid, typeof(string));
-            _partsTable.Columns.Add(ColumnRemarks, typeof(double));
-            _partsTable.Columns.Add(ColumnRemaining, typeof(double));
-            _partsTable.Columns.Add(ColumnQty, typeof(double));
-            _partsTable.Columns.Add(ColumnDidRule, typeof(string));
-            _partsTable.Columns.Add(ColumnLocation, typeof(string));
-            _partsTable.Columns.Add(ColumnMinSurplus, typeof(int));
-            _partsTable.Columns.Add(ColumnStopQty, typeof(string));
-            _partsTable.Columns.Add(ColumnClientNo, typeof(string));
         }
 
         /// <summary>
@@ -1357,7 +1126,6 @@ namespace WindowsFormsApp
 
             row[ColumnDid] = DBNull.Value;
             row[ColumnRemaining] = row[ColumnRemarks];
-            SaveTable();
             dataGridViewParts.Refresh();
             AddLogMessage($"已重置第 {e.RowIndex + 1} 行 [{bydpn}] 的绑定记录。");
         }
@@ -1399,7 +1167,6 @@ namespace WindowsFormsApp
                 row[ColumnRemaining] = row[ColumnRemarks];
             }
 
-            SaveTable();
             dataGridViewParts.Refresh();
             RefreshMatchCandidates();
             SetStatus(string.Format("已重置 {0} 个已绑定的小件码，并同步保存到本地 XML。", boundCount));
@@ -1625,7 +1392,6 @@ namespace WindowsFormsApp
 
             targetRow[ColumnDid] = inputCode;
             RefreshQtyAfterLoadUp(targetRow);  // 上料后获取最新剩余数量
-            SaveTable();
             dataGridViewParts.Refresh();
 
             string boundPartName = Convert.ToString(targetRow[ColumnBydpn]);
@@ -1694,7 +1460,6 @@ namespace WindowsFormsApp
             // 3. 更新本地行
             row[ColumnDid] = newDid;
             RefreshQtyAfterLoadUp(row);  // 上料后获取最新剩余数量
-            SaveTable();
             dataGridViewParts.Refresh();
 
             SetStatus($"上新小件成功：{bydpn} [{oldDid}] → [{newDid}]");
