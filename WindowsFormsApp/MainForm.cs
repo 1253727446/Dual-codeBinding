@@ -1082,95 +1082,14 @@ namespace WindowsFormsApp
             dataGridViewParts.Columns[ColumnStopQty].HeaderText = "停机数量";
             dataGridViewParts.Columns[ColumnClientNo].HeaderText = "料号";
 
-            // 添加操作按钮列（重置单条绑定）
-            if (!dataGridViewParts.Columns.Contains("btnResetRow"))
-            {
-                var btnCol = new DataGridViewButtonColumn
-                {
-                    Name = "btnResetRow",
-                    HeaderText = "操作",
-                    Text = "重置",
-                    UseColumnTextForButtonValue = true,
-                    FlatStyle = FlatStyle.Flat
-                };
-                dataGridViewParts.Columns.Add(btnCol);
-            }
-
-            // 只注册一次事件
-            dataGridViewParts.CellContentClick -= DataGridViewParts_CellContentClick;
-            dataGridViewParts.CellContentClick += DataGridViewParts_CellContentClick;
-
             // 自动调整列宽和行高以适应内容
             dataGridViewParts.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells);
             dataGridViewParts.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells);
         }
 
-        /// <summary>
-        /// 单行重置：清空该行 Did，恢复剩余数量为总数，保存并刷新
-        /// </summary>
-        private void DataGridViewParts_CellContentClick(object sender, DataGridViewCellEventArgs e)
-        {
-            if (e.RowIndex < 0) return;
-            if (dataGridViewParts.Columns[e.ColumnIndex].Name != "btnResetRow") return;
-
-            DataRow row = _partsTable.Rows[e.RowIndex];
-            string bydpn = Convert.ToString(row[ColumnBydpn]);
-            string currentDid = Convert.ToString(row[ColumnDid]);
-
-            if (string.IsNullOrWhiteSpace(currentDid))
-            {
-                MessageBox.Show($"第 {e.RowIndex + 1} 行 [{bydpn}] 当前未绑定，无需重置。", "提示",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            row[ColumnDid] = DBNull.Value;
-            row[ColumnRemaining] = row[ColumnRemarks];
-            dataGridViewParts.Refresh();
-            AddLogMessage($"已重置第 {e.RowIndex + 1} 行 [{bydpn}] 的绑定记录。");
-        }
-
         // ============================================================
         // 小件上料页
         // ============================================================
-
-        /// <summary>
-        /// 清空所有已绑定的小件码（重置第二列 Did）；
-        /// 操作前统计并确认，清空后立即保存到本地 XML
-        /// </summary>
-        private void btnResetBindings_Click(object sender, EventArgs e)
-        {
-            // 统计已绑定数量
-            int boundCount = _partsTable.Rows.Cast<DataRow>()
-                .Count(row => !string.IsNullOrWhiteSpace(Convert.ToString(row[ColumnDid])));
-
-            if (boundCount == 0)
-            {
-                MessageBox.Show("当前没有已绑定的小件码可重置。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            // 二次确认
-            DialogResult result = MessageBox.Show(
-                string.Format("确认要清空全部 {0} 个已绑定的小件码吗？", boundCount),
-                "确认重置绑定",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (result != DialogResult.Yes)
-                return;
-
-            // 清空所有 Did 列
-            foreach (DataRow row in _partsTable.Rows)
-            {
-                row[ColumnDid] = string.Empty;
-                row[ColumnRemaining] = row[ColumnRemarks];
-            }
-
-            dataGridViewParts.Refresh();
-            RefreshMatchCandidates();
-            SetStatus(string.Format("已重置 {0} 个已绑定的小件码，并同步保存到本地 XML。", boundCount));
-        }
 
         /// <summary>
         /// 根据输入的小件码，匹配所有"未绑定且规则命中"的行，填充下拉框供用户选择

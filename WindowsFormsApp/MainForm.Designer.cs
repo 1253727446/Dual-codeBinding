@@ -35,6 +35,7 @@
             System.Windows.Forms.DataGridViewCellStyle dataGridViewCellStyle5 = new System.Windows.Forms.DataGridViewCellStyle();
             this.uiTabControl1 = new Sunny.UI.UITabControl();
             this.pageScan = new System.Windows.Forms.TabPage();
+            this.uiLabel2 = new Sunny.UI.UILabel();
             this.ConfigCombox = new Sunny.UI.UIComboBox();
             this.uiLabel7 = new Sunny.UI.UILabel();
             this.uiRichTextBox1 = new Sunny.UI.UIRichTextBox();
@@ -54,14 +55,12 @@
             this.SFC_UITextBox = new Sunny.UI.UITextBox();
             this.uiLabel1 = new Sunny.UI.UILabel();
             this.pageLoad = new System.Windows.Forms.TabPage();
-            this.btnResetBindings = new System.Windows.Forms.Button();
             this.lblStatus = new System.Windows.Forms.Label();
             this.uiLabel14 = new Sunny.UI.UILabel();
             this.cmbMatches = new Sunny.UI.UIComboBox();
             this.dataGridViewParts = new Sunny.UI.UIDataGridView();
             this.txtInputCode = new Sunny.UI.UITextBox();
             this.uiLabel12 = new Sunny.UI.UILabel();
-            this.uiLabel2 = new Sunny.UI.UILabel();
             this.uiTabControl1.SuspendLayout();
             this.pageScan.SuspendLayout();
             this.uiPanel1.SuspendLayout();
@@ -114,6 +113,18 @@
             this.pageScan.Size = new System.Drawing.Size(809, 464);
             this.pageScan.TabIndex = 0;
             this.pageScan.Text = "扫码过站";
+            // 
+            // uiLabel2
+            // 
+            this.uiLabel2.Anchor = System.Windows.Forms.AnchorStyles.None;
+            this.uiLabel2.BackColor = System.Drawing.Color.DodgerBlue;
+            this.uiLabel2.Font = new System.Drawing.Font("宋体", 72F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.uiLabel2.ForeColor = System.Drawing.Color.White;
+            this.uiLabel2.Location = new System.Drawing.Point(11, 94);
+            this.uiLabel2.Name = "uiLabel2";
+            this.uiLabel2.Size = new System.Drawing.Size(787, 147);
+            this.uiLabel2.TabIndex = 10;
+            this.uiLabel2.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // ConfigCombox
             // 
@@ -374,7 +385,6 @@
             // 
             // pageLoad
             // 
-            this.pageLoad.Controls.Add(this.btnResetBindings);
             this.pageLoad.Controls.Add(this.lblStatus);
             this.pageLoad.Controls.Add(this.uiLabel14);
             this.pageLoad.Controls.Add(this.cmbMatches);
@@ -382,23 +392,13 @@
             this.pageLoad.Controls.Add(this.txtInputCode);
             this.pageLoad.Controls.Add(this.uiLabel12);
             this.pageLoad.Font = new System.Drawing.Font("黑体", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.pageLoad.Location = new System.Drawing.Point(0, 20);
+            this.pageLoad.Location = new System.Drawing.Point(0, 40);
             this.pageLoad.Name = "pageLoad";
-            this.pageLoad.Size = new System.Drawing.Size(809, 464);
+            this.pageLoad.Size = new System.Drawing.Size(200, 60);
             this.pageLoad.TabIndex = 2;
             this.pageLoad.Text = "小件上料";
             this.pageLoad.UseVisualStyleBackColor = true;
             // 
-            // btnResetBindings
-            // 
-            this.btnResetBindings.Location = new System.Drawing.Point(646, 158);
-            this.btnResetBindings.Margin = new System.Windows.Forms.Padding(2);
-            this.btnResetBindings.Name = "btnResetBindings";
-            this.btnResetBindings.Size = new System.Drawing.Size(107, 23);
-            this.btnResetBindings.TabIndex = 12;
-            this.btnResetBindings.Text = "重置绑定";
-            this.btnResetBindings.UseVisualStyleBackColor = true;
-            this.btnResetBindings.Click += new System.EventHandler(this.btnResetBindings_Click);
             // 
             // lblStatus
             // 
@@ -407,7 +407,7 @@
             this.lblStatus.Location = new System.Drawing.Point(27, 158);
             this.lblStatus.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.lblStatus.Name = "lblStatus";
-            this.lblStatus.Size = new System.Drawing.Size(609, 23);
+            this.lblStatus.Size = new System.Drawing.Size(0, 23);
             this.lblStatus.TabIndex = 11;
             this.lblStatus.Text = "状态：等待输入小件码。";
             this.lblStatus.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
@@ -420,7 +420,7 @@
             this.uiLabel14.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.uiLabel14.Location = new System.Drawing.Point(18, 92);
             this.uiLabel14.Name = "uiLabel14";
-            this.uiLabel14.Size = new System.Drawing.Size(81, 35);
+            this.uiLabel14.Size = new System.Drawing.Size(0, 35);
             this.uiLabel14.TabIndex = 9;
             this.uiLabel14.Text = "匹配结果:";
             this.uiLabel14.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
@@ -473,7 +473,7 @@
             this.dataGridViewParts.EnableHeadersVisualStyles = false;
             this.dataGridViewParts.Font = new System.Drawing.Font("宋体", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.dataGridViewParts.GridColor = System.Drawing.Color.FromArgb(((int)(((byte)(80)))), ((int)(((byte)(160)))), ((int)(((byte)(255)))));
-            this.dataGridViewParts.Location = new System.Drawing.Point(27, 209);
+            this.dataGridViewParts.Location = new System.Drawing.Point(27, -195);
             this.dataGridViewParts.Name = "dataGridViewParts";
             this.dataGridViewParts.ReadOnly = true;
             this.dataGridViewParts.RowHeadersBorderStyle = System.Windows.Forms.DataGridViewHeaderBorderStyle.Single;
@@ -490,7 +490,7 @@
             this.dataGridViewParts.RowsDefaultCellStyle = dataGridViewCellStyle5;
             this.dataGridViewParts.RowTemplate.Height = 23;
             this.dataGridViewParts.SelectedIndex = -1;
-            this.dataGridViewParts.Size = new System.Drawing.Size(754, 227);
+            this.dataGridViewParts.Size = new System.Drawing.Size(145, 227);
             this.dataGridViewParts.StripeOddColor = System.Drawing.Color.FromArgb(((int)(((byte)(235)))), ((int)(((byte)(243)))), ((int)(((byte)(255)))));
             this.dataGridViewParts.TabIndex = 7;
             // 
@@ -505,7 +505,7 @@
             this.txtInputCode.Name = "txtInputCode";
             this.txtInputCode.Padding = new System.Windows.Forms.Padding(5);
             this.txtInputCode.ShowText = false;
-            this.txtInputCode.Size = new System.Drawing.Size(610, 35);
+            this.txtInputCode.Size = new System.Drawing.Size(1, 35);
             this.txtInputCode.TabIndex = 4;
             this.txtInputCode.TextAlignment = System.Drawing.ContentAlignment.MiddleLeft;
             this.txtInputCode.Watermark = "";
@@ -519,23 +519,10 @@
             this.uiLabel12.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.uiLabel12.Location = new System.Drawing.Point(15, 29);
             this.uiLabel12.Name = "uiLabel12";
-            this.uiLabel12.Size = new System.Drawing.Size(65, 35);
+            this.uiLabel12.Size = new System.Drawing.Size(0, 35);
             this.uiLabel12.TabIndex = 3;
             this.uiLabel12.Text = "小件码:";
             this.uiLabel12.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
-            // 
-            // uiLabel2
-            // 
-            this.uiLabel2.Anchor = System.Windows.Forms.AnchorStyles.None;
-            this.uiLabel2.BackColor = System.Drawing.Color.DodgerBlue;
-            this.uiLabel2.Font = new System.Drawing.Font("宋体", 72F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
-            this.uiLabel2.ForeColor = System.Drawing.Color.White;
-            this.uiLabel2.Location = new System.Drawing.Point(11, 94);
-            this.uiLabel2.Name = "uiLabel2";
-            this.uiLabel2.Size = new System.Drawing.Size(787, 147);
-            this.uiLabel2.TabIndex = 10;
-            this.uiLabel2.Text = "";
-            this.uiLabel2.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // MainForm
             // 
@@ -588,7 +575,6 @@
         private Sunny.UI.UIComboBox cmbMatches;
         private Sunny.UI.UILabel uiLabel14;
         private System.Windows.Forms.Label lblStatus;
-        private System.Windows.Forms.Button btnResetBindings;
         private Sunny.UI.UIComboBox ConfigCombox;
         private Sunny.UI.UILabel uiLabel7;
     }
