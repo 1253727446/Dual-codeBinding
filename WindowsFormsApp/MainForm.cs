@@ -80,8 +80,8 @@ namespace WindowsFormsApp
         {
             InitializeComponent();
             g_DicMESConfig = new ConfigService().LoadAllConfig();
-            _passSound = new SoundPlayer(@"C:\Users\13657\Downloads\Pass.wav");
-            _failSound = new SoundPlayer(@"C:\Users\13657\Downloads\alert.wav");
+            _passSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Pass.wav"));
+            _failSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "alert.wav"));
         }
 
         /// <summary>
