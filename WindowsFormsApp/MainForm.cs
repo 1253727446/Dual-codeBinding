@@ -7,8 +7,9 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Media;
 using System.Threading.Tasks;
-using System.Windows.Forms; 
+using System.Windows.Forms;
 
 namespace WindowsFormsApp
 {
@@ -67,6 +68,10 @@ namespace WindowsFormsApp
         private DateTime _lastShiftDate = DateTime.MinValue;
         /// <summary>换班检查定时器</summary>
         private System.Windows.Forms.Timer _shiftTimer;
+        /// <summary>过站成功音效</summary>
+        private SoundPlayer _passSound;
+        /// <summary>过站失败音效</summary>
+        private SoundPlayer _failSound;
 
         /// <summary></summary>
         /// 构造函数：初始化组件、加载全部配置
@@ -75,6 +80,8 @@ namespace WindowsFormsApp
         {
             InitializeComponent();
             g_DicMESConfig = new ConfigService().LoadAllConfig();
+            _passSound = new SoundPlayer(@"C:\Users\13657\Downloads\Pass.wav");
+            _failSound = new SoundPlayer(@"C:\Users\13657\Downloads\alert.wav");
         }
 
         /// <summary>
@@ -176,12 +183,14 @@ namespace WindowsFormsApp
                     FailCount.Text = _failCount.ToString();
                     uiLabel2.Text = "FAIL";
                     uiLabel2.BackColor = Color.Red;
+                    try { _failSound?.Play(); } catch { }
                 }));
                 return;
             }
             FailCount.Text = _failCount.ToString();
             uiLabel2.Text = "FAIL";
             uiLabel2.BackColor = Color.Red;
+            try { _failSound?.Play(); } catch { }
         }
 
         /// <summary>
@@ -196,6 +205,7 @@ namespace WindowsFormsApp
             }
             uiLabel2.Text = "PASS";
             uiLabel2.BackColor = Color.Green;
+            try { _passSound?.Play(); } catch { }
         }
 
         /// <summary>
