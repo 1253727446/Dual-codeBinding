@@ -1,12 +1,15 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using SimpleTCP;
 using Sunny.UI;
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Media;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -14,25 +17,8 @@ namespace WindowsFormsApp
 {
     public partial class MainForm : UIForm
     {
-        // ========== 表格列名常量 ==========
-        private const string ColumnBydpn = "Bydpn";
-        private const string ColumnDid = "Did";
-        private const string ColumnRemarks = "Remarks";
-        private const string ColumnRemaining = "Remaining";
-        private const string ColumnQty = "Qty";
-        private const string ColumnDidRule = "DidRule";
-        private const string ColumnLocation = "Location";
-        private const string ColumnMinSurplus = "MinSurplus";
-        private const string ColumnStopQty = "StopQty";
-        private const string ColumnClientNo = "ClientNo";
-
-        // ========== 小件数据相关字段 ==========
-        /// <summary>承载表格数据的 DataTable，直接绑定到 DataGridView</summary>
-        private DataTable _partsTable;
-        /// <summary>过站计数器持久化路径</summary>
+        // ========== 过站计数器持久化路径 ==========
         private readonly string _countersPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "counters.json");
-        /// <summary>所有小件定义（从 MES 接口获取）</summary>
-        private List<SubMaterialDef> _allSubDefs = new List<SubMaterialDef>();
 
         // ========== 配置与运行参数 ==========
         /// <summary>配置参数字典（Config / Setting 两节）</summary>
@@ -41,20 +27,12 @@ namespace WindowsFormsApp
         private string _mesUrl;
         private string _loginId;
         private string _clientId;
-        /// <summary>胶水校验是否启用</summary>
-        private bool _glueCheckEnabled;
-        /// <summary>上一工站过站开关</summary>
-        private bool _lastStationEnabled;
-        /// <summary>胶水 DID（校验通过后缓存，供 TestDataCollect 使用）</summary>
-        private string _glueDid;
-
-        // ========== 小件上料辅助 ==========
-        /// <summary>防止下拉框填充时触发 SelectedIndexChanged</summary>
-        private bool _populatingMatches;
-
-        // ========== 条码规则 ==========
-        /// <summary>从 MES 获取的 SFC 通配符规则（? 匹配任意字符）</summary>
-        private string SFCRule = "";
+        /// <summary>本地工站名（用于 SFC Log 过滤和校验）</summary>
+        private string _logStation;
+        /// <summary>第一条符合规则的 SFC Log 的 logStation（用于 ChangeSfcStation）</summary>
+        private string _firstLogStation;
+        /// <summary>SFC Log 校验是否通过（通过才调 ChangeSfcStation）</summary>
+        private bool _sfcLogPassed;
 
         // ========== 过站计数器 ==========
         /// <summary>当班过站成功计数</summary>
@@ -70,6 +48,36 @@ namespace WindowsFormsApp
         /// <summary>过站失败音效</summary>
         private SoundPlayer _failSound;
 
+        // ========== 扫码枪 / CCD 连接 ==========
+        /// <summary>扫码枪 TCP 客户端</summary>
+        private SimpleTcpClient scanclient;
+        /// <summary>扫码枪是否已连接</summary>
+        private bool _scanConnected;
+        /// <summary>扫码枪是否正在重连中</summary>
+        private bool _scanReconnecting;
+        /// <summary>扫码枪 IP / 端口（缓存）</summary>
+        private string _scanIp;
+        private int _scanPort;
+        /// <summary>扫码枪健康检查定时器</summary>
+        private System.Timers.Timer _scanHealthTimer;
+        /// <summary>CCD TCP 客户端</summary>
+        private SimpleTcpClient _ccdClient;
+        /// <summary>CCD 是否已连接</summary>
+        private bool _ccdConnected;
+        /// <summary>CCD 是否正在重连中</summary>
+        private bool _ccdReconnecting;
+        /// <summary>CCD IP / 端口（缓存）</summary>
+        private string _ccdIp;
+        private int _ccdPort;
+        /// <summary>CCD 健康检查定时器</summary>
+        private System.Windows.Forms.Timer _ccdHealthTimer;
+        /// <summary>CCD 是否在等待结果</summary>
+        private volatile bool _ccdArmed;
+        /// <summary>当前等待 CCD 结果的 SFC</summary>
+        private string _ccdPendingSfc;
+        /// <summary>后台任务取消令牌</summary>
+        private CancellationTokenSource _cts;
+
         /// <summary></summary>
         /// 构造函数：初始化组件、加载全部配置
         /// </summary>
@@ -77,42 +85,25 @@ namespace WindowsFormsApp
         {
             InitializeComponent();
             g_DicMESConfig = new ConfigService().LoadAllConfig();
+            _cts = new CancellationTokenSource();
             _passSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Pass.wav"));
             _failSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "alert.wav"));
         }
 
         /// <summary>
-        /// 窗体加载：缓存配置 → 初始化参数 → 获取规则 → 加载表格 → 绑定网格 → 启动换班定时器 → 注册关闭事件
+        /// 窗体加载：缓存配置 → 初始化参数 → 连接设备 → 启动健康检查/定时器 → 注册关闭事件
         /// </summary>
         private void Form1_Load(object sender, EventArgs e)
         {
             CacheConfig();               // 缓存 MES 接口 URL / LoginID / ClientID
-            InitSettings();              // 读取胶水校验等软件配置
-            GetCustomData();             // 从 MES 获取 SFC 条码匹配规则
-            LoadPartsFromApi();          // 从 MES 接口拉取小件表格
-            BindGrid();                  // 小件 DataTable 绑定到 DataGridView
+            InitSettings();              // 读取设备、工站等本地配置
             LoadCounters();              // 从 counters.json 恢复过站计数器
+            ConnectToScanner();          // 连接扫码枪 TCP
+            ConnectToCcd();              // 连接 CCD TCP（始终启用）
+            StartScanHealthCheck();      // 启动扫码枪健康检查/自动重连
+            StartCcdHealthCheck();       // 启动 CCD 健康检查/自动重连
             StartShiftTimer();           // 启动换班检查定时器（8:00 / 20:00）
-            SFC_UITextBox.KeyDown += SFC_UITextBox_KeyDown;  // 注册回车触发过站
             this.FormClosing += MainForm_FormClosing;  // 注册关闭事件释放资源
-        }
-
-        /// <summary>
-        /// SFC 输入框回车触发过站流程
-        /// </summary>
-        private void SFC_UITextBox_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                string sfc = SFC_UITextBox.Text.Trim();
-                if (!string.IsNullOrWhiteSpace(sfc))
-                {
-                    SFC_UITextBox.Text = "";
-                    Task.Run(() => ruleSFC(sfc));
-                }
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
         }
 
         /// <summary>
@@ -126,11 +117,19 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 读取 SOFTWARE 节中的软件行为配置
+        /// 读取设备连接和工站配置
         /// </summary>
         private void InitSettings()
         {
-            bool.TryParse(g_DicMESConfig["SOFTWARE"]["laststation"], out _lastStationEnabled);
+            // SFC Log 校验用的本地工站名
+            _logStation = g_DicMESConfig["SOFTWARE"].ContainsKey("logStation")
+                ? g_DicMESConfig["SOFTWARE"]["logStation"] : "";
+            // 扫码枪配置
+            _scanIp = g_DicMESConfig["Setting"]["scanip"];
+            int.TryParse(g_DicMESConfig["Setting"]["scanport"], out _scanPort);
+            // CCD 配置
+            _ccdIp = g_DicMESConfig["CCD"]["ip"];
+            int.TryParse(g_DicMESConfig["CCD"]["port"], out _ccdPort);
         }
 
         /// <summary>
@@ -249,12 +248,22 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 窗体关闭时取消心跳任务，释放 PLC 连接和扫码枪连接
+        /// 窗体关闭时释放扫码枪和 CCD 连接及定时器
         /// </summary>
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
+            try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
+            _scanHealthTimer?.Stop();
+            _scanHealthTimer?.Dispose();
+            _ccdHealthTimer?.Stop();
+            _ccdHealthTimer?.Dispose();
+            try { scanclient?.Disconnect(); } catch (Exception) { }
+            try { scanclient?.Dispose(); } catch (Exception) { }
+            try { _ccdClient?.Disconnect(); } catch (Exception) { }
+            try { _ccdClient?.Dispose(); } catch (Exception) { }
         }
 
         // ============================================================
@@ -262,15 +271,11 @@ namespace WindowsFormsApp
         // ============================================================
 
         /// <summary>
-        /// SFC 扫码过站主流程：
-        /// 1. 校验 SFC 是否符合规则
-        /// 2. 胶水库存校验
-        /// 3. 小件绑定及数量校验
-        /// 4. MES Start（产品入站）
-        /// 5. TestDataCollect2MainChild（上报测试数据）
-        /// 6. AddSfcKey（上报 Config 绑定，Config=false 时跳过）
-        /// 7. MES Complete（过站完成）
-        /// 每步失败向 PLC 写对应状态码，并更新过站计数器
+        /// SFC 过站主流程：
+        /// 1. MES Start（产品入站）
+        /// 2. 提交 CCD 等待判定结果
+        /// （Complete / NcComplete 由 CCD 回调异步完成）
+        /// 若 CCD 还在处理上一个条码，拒绝新条码防止覆盖
         /// </summary>
         /// <param name="sfcValue">扫描到的 SFC 条码值</param>
         private bool ruleSFC(string sfcValue)
@@ -278,86 +283,17 @@ namespace WindowsFormsApp
             sfcValue = sfcValue.Trim();
             // 清空结果标签
             BeginInvoke(new Action(() => { uiLabel2.Text = ""; }));
-            // 第一步：SFC 规则校验
-            if (!ValidateSFC(sfcValue, SFCRule))
-            {
-                AddLogMessage($"SFC规则校验失败：SFC = {sfcValue} 不符合规则 {SFCRule}", Color.Red);
-                this.BeginInvoke(new Action(() => SFC_UITextBox.Text = ""));
-                MarkFail();
-                return false;
-            }
-            AddLogMessage($"SFC规则校验成功：SFC = {sfcValue}", Color.Green);
 
-            // [上一工站过站] 受 laststation 开关控制
-            if (_lastStationEnabled)
+            // 防止覆盖：CCD 还在等待上一个条码的结果
+            if (_ccdArmed)
             {
-                string stationId = g_DicMESConfig["Config"]["StationID"];
-                bool gotPrev = FormHelper.GetAboutStationByStationId(
-                    _mesUrl, _loginId, _clientId, stationId,
-                    out string prevName, out string prevId, out string prevMsg);
-                if (!gotPrev)
-                {
-                    AddLogMessage($"获取上一工站失败：{prevMsg}", Color.Red);
-                    MarkFail();
-                    return false;
-                }
-                AddLogMessage($"上一工站：{prevName} (ID={prevId})", Color.Blue);
-
-                // 上一工站胶水校验
-                if (_glueCheckEnabled && !ValidateGlueStock())
-                {
-                    MarkFail();
-                    return false;
-                }
-                // 上一工站小件校验
-                if (!ValidatePartsBeforePass())
-                {
-                    AddLogMessage("上一工站小件校验失败", Color.Red);
-                    MarkFail();
-                    return false;
-                }
-                // 上一工站 Start
-                string shopOrder = g_DicMESConfig["Config"]["SapShoporder"];
-                string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
-                if (!FormHelper.Start(_mesUrl, _loginId, _clientId, sfcValue, prevName,
-                    g_DicMESConfig["Config"]["Line"], shopOrder, schedulingId, out string startMsg))
-                {
-                    AddLogMessage($"上一工站 Start 失败：{startMsg}，跳过继续当前工站", Color.Orange);
-                }
-                else
-                {
-                    AddLogMessage($"上一工站 Start 成功（{prevName}）", Color.Green);
-                    // 上一工站 Complete
-                    string remark = g_DicMESConfig["Config"].ContainsKey("Remark")
-                        ? g_DicMESConfig["Config"]["Remark"] : "";
-                    if (!FormHelper.Complete(_mesUrl, _loginId, _clientId, sfcValue, prevId,
-                        schedulingId, remark, out string cplMsg))
-                    {
-                        AddLogMessage($"上一工站 Complete 失败：{cplMsg}", Color.Red);
-                        MarkFail();
-                        return false;
-                    }
-                    AddLogMessage($"上一工站 Complete 成功（ID={prevId}）", Color.Green);
-                }
-            }
-
-            // 第二步：胶水库存校验（GetAuxmStockList）
-            if (!ValidateGlueStock())
-            {
+                AddLogMessage($"CCD 忙：正在等待 [{_ccdPendingSfc}] 的判定结果，拒绝 [{sfcValue}]", Color.Red);
+                BeginInvoke(new Action(() => SFC_UITextBox.Text = ""));
                 MarkFail();
                 return false;
             }
 
-            // 第三步：小件绑定及数量校验
-            if (!ValidatePartsBeforePass())
-            {
-                AddLogMessage("过站前小件信息校验失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("小件校验成功", Color.Green);
-
-            // 第四步：MES Start（产品入站）
+            // 第一步：MES Start（产品入站）
             if (!Start(sfcValue))
             {
                 AddLogMessage("Start失败", Color.Red);
@@ -366,223 +302,16 @@ namespace WindowsFormsApp
             }
             AddLogMessage("start成功", Color.Green);
 
-            // 第五步：TestDataCollect2MainChild（上报测试数据）
-            if (!TestDataCollect(sfcValue))
-            {
-                AddLogMessage("TestDataCollect2MainChild 失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("TestDataCollect2MainChild上传成功", Color.Green);
-
-            // 第五步半：Binding 扣料
-            if (!BindingDeduction(sfcValue))
-            {
-                AddLogMessage("Binding 扣料失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("Binding 扣料成功", Color.Green);
-
-            // 第六步：AddSfcKey 上报 Config 绑定结果（Config=false 时跳过）
-            if (!UploadConfigBinding(sfcValue))
-            {
-                AddLogMessage("AddSfcKey 上报失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("AddSfcKey成功", Color.Green);
-
-            // 第七步：MES Complete（过站完成）
-            if (!Complete(sfcValue))
-            {
-                AddLogMessage("Complete失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("Complete成功", Color.Green);
-            _passCount++;
-            SaveCounters();
-            SetPassLabel();
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => PassCount.Text = _passCount.ToString()));
-            }
-            else
-            {
-                PassCount.Text = _passCount.ToString();
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// 过站前校验所有小件：必须全部绑定 Did，且每次扣减数不大于剩余数量
-        /// </summary>
-        /// <returns>校验通过返回 true</returns>
-        private bool ValidatePartsBeforePass()
-        {
-            if (_partsTable == null)
-            {
-                AddLogMessage("小件表格还没有初始化。", Color.Red);
-                return false;
-            }
-
-            if (_partsTable.Rows.Count == 0)
-            {
-                AddLogMessage("当前没有小件数据，请先加载小件。", Color.Red);
-                return false;
-            }
-
-            // 收集未绑定和数量不足的小件
-            List<string> unboundParts = new List<string>();
-            List<string> notEnoughParts = new List<string>();
-            List<string> lowSurplusWarnings = new List<string>();
-
-            foreach (DataRow row in _partsTable.Rows)
-            {
-                string bydpn = Convert.ToString(row[ColumnBydpn]).Trim();
-                string did = Convert.ToString(row[ColumnDid]).Trim();
-
-                if (string.IsNullOrWhiteSpace(did))
-                {
-                    unboundParts.Add(bydpn);
-                    continue;
-                }
-
-                double remaining = Convert.ToDouble(row[ColumnRemaining]);
-                double deductCount = Convert.ToDouble(row[ColumnQty]);
-                int minSurplus = Convert.ToInt32(row[ColumnMinSurplus]);
-                int stopQty;
-                int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
-
-                if (remaining < deductCount)
-                {
-                    notEnoughParts.Add(
-                        bydpn + "：剩余数量 " + remaining + "，每次扣减 " + deductCount + "（不够扣）");
-                }
-                else if (remaining <= stopQty)
-                {
-                    notEnoughParts.Add(
-                        bydpn + "：剩余数量 " + remaining + " ≤ 停机数量 " + stopQty + "（低于停机数量）");
-                }
-                else if (remaining < minSurplus)
-                {
-                    lowSurplusWarnings.Add(
-                        bydpn + "：剩余数量 " + remaining + " < 最小剩余 " + minSurplus + "（低于最小剩余，仍可过站）");
-                }
-            }
-
-            // UI日志警告
-            if (unboundParts.Count > 0)
-            {
-                AddLogMessage(
-                    "以下小件还没有绑定小件码，不能过站：" +
-                    string.Join("；", unboundParts),
-                    Color.Red);
-                return false;
-            }
-
-            if (notEnoughParts.Count > 0)
-            {
-                AddLogMessage(
-                    "以下小件数量不够扣减，不能过站：" +
-                    string.Join("；", notEnoughParts),
-                    Color.Red);
-                return false;
-            }
-
-            if (lowSurplusWarnings.Count > 0)
-            {
-                AddLogMessage(
-                    "以下小件剩余数量低于最小剩余：" +
-                    string.Join("；", lowSurplusWarnings),
-                    Color.Orange);
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// 验证 SFC 值是否符合通配符规则（? 代表匹配任意单字符，非 ? 必须严格相等）
-        /// </summary>
-        /// <param name="value">实际输入的 SFC 值</param>
-        /// <param name="rule">规则字符串，? 代表任意字符</param>
-        /// <returns>true 表示匹配</returns>
-        private bool ValidateSFC(string value, string rule)
-        {
-            if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(rule))
-                return false;
-            if (value.Length != rule.Length)
-                return false;
-
-            for (int i = 0; i < rule.Length; i++)
-            {
-                char ruleChar = rule[i];
-                char valueChar = value[i];
-
-                if (ruleChar == '?')
-                    continue;           // ? 匹配任意字符
-                if (ruleChar != valueChar)
-                    return false;       // 非 ? 必须严格相等
-            }
+            // 第二步：提交 CCD 等待判定结果
+            _ccdPendingSfc = sfcValue;
+            _ccdArmed = true;
+            AddLogMessage($"等待CCD判定结果（SFC={sfcValue}）", Color.Blue);
             return true;
         }
 
         // ============================================================
         // MES 接口调用
         // ============================================================
-
-        /// <summary>
-        /// 调用 MES GetCustomData 接口获取 SFC 条码匹配规则
-        /// </summary>
-        private void GetCustomData()
-        {
-            string ProjectID = g_DicMESConfig["Config"]["PROJECT_ID"];
-            string ProductID = g_DicMESConfig["Config"]["PRODUCT_ID"];
-            string StationID = g_DicMESConfig["Config"]["StationID"];
-            string Line = g_DicMESConfig["Config"]["Line"];
-            string ProjectName = g_DicMESConfig["Config"]["PROJECT"];
-            string ProductName = g_DicMESConfig["Config"]["PRODUCT"];
-            bool flag = FormHelper.GetCustomData(_mesUrl, _loginId, _clientId, ProjectID, ProductID, StationID, Line, ProjectName, ProductName, out string rule, out string config, out string msg);
-            if (!flag)
-            {
-                AddLogMessage(msg, Color.Red);
-            }
-            else
-            {
-                AddLogMessage("GetCustomData成功");
-                AddLogMessage("已加载条码规则：" + rule);
-                SFCRule = rule;
-
-                // 填充 ConfigCombox（分号分隔）
-                if (!string.IsNullOrWhiteSpace(config))
-                {
-                    string[] configItems = config.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-                    ConfigCombox.SelectedIndexChanged -= ConfigCombox_SelectedIndexChanged;
-                    ConfigCombox.DataSource = configItems;
-
-                    string selectedConfig = g_DicMESConfig["SOFTWARE"].ContainsKey("selectedConfig")
-                        ? g_DicMESConfig["SOFTWARE"]["selectedConfig"] : "";
-                    bool configEditable = g_DicMESConfig["SOFTWARE"].ContainsKey("Config")
-                        && bool.TryParse(g_DicMESConfig["SOFTWARE"]["Config"], out bool ce) && ce;
-
-                    ConfigCombox.Enabled = configEditable;
-                    ConfigCombox.Visible = configEditable;
-                    uiLabel7.Visible = configEditable;
-
-                    if (!string.IsNullOrWhiteSpace(selectedConfig) && configItems.Contains(selectedConfig))
-                    {
-                        ConfigCombox.SelectedItem = selectedConfig;
-                    }
-                    else
-                    {
-                        ConfigCombox.SelectedIndex = 0;
-                    }
-
-                    ConfigCombox.SelectedIndexChanged += ConfigCombox_SelectedIndexChanged;
-                }
-            }
-        }
 
         /// <summary>
         /// 调用 MES Start 接口，产品入站
@@ -608,234 +337,6 @@ namespace WindowsFormsApp
                 AddLogMessage("Start异常：" + ex.Message, Color.Red);
                 return false;
             }
-        }
-
-        /// <summary>
-        /// 调用 MES Complete 接口，产品过站完成
-        /// </summary>
-        /// <param name="SFC">条码值</param>
-        /// <returns>成功返回 true</returns>
-        private bool Complete(string SFC)
-        {
-            try
-            {
-                string StationID = g_DicMESConfig["Config"]["StationID"];
-                string SchingID = g_DicMESConfig["Config"]["SchedulingID"];
-                string Remark = g_DicMESConfig["Config"]["Remark"];
-
-                bool flag = FormHelper.Complete(_mesUrl, _loginId, _clientId, SFC, StationID, SchingID, Remark, out string msg);
-                if (!flag)
-                    AddLogMessage(msg, Color.Red);
-                return flag;
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("Complete异常：" + ex.Message, Color.Red);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 调用 MES TestDataCollect2MainChild 接口上报测试数据，
-        /// 成功后从每行 Remaining（剩余数量）中减去 Qty（每次扣减数），并保存到本地 XML
-        /// </summary>
-        /// <param name="sfcValue">当前 SFC 条码</param>
-        /// <returns>成功返回 true</returns>
-        private bool TestDataCollect(string sfcValue)
-        {
-            try
-            {
-                string lineNo = g_DicMESConfig["Config"]["Line"];
-                string productName = g_DicMESConfig["Config"]["PRODUCT"];
-                string projectName = g_DicMESConfig["Config"]["PROJECT"];
-                string shoporderNo = g_DicMESConfig["Config"]["SapShoporder"];
-                string testStation = g_DicMESConfig["Config"]["Operation"];
-                string fixtureNo = g_DicMESConfig["Config"]["TraceStationId"];
-                // 构建 TEST_DATA_LIST：遍历所有小件行
-                var testDataList = new List<TestDataItem>();
-                foreach (DataRow row in _partsTable.Rows)
-                {
-                    string bydpn = Convert.ToString(row[ColumnBydpn]);
-                    string did = Convert.ToString(row[ColumnDid]);
-                    testDataList.Add(new TestDataItem
-                    {
-                        NAME = bydpn,
-                        VALUE = did,
-                        TEST_RESULT = "PASS",
-                        MAX_VALUE = "",
-                        MIN_VALUE = "",
-                        STANDARD_VALUE = ""
-                    });
-                }
-
-                // 胶水校验启用且 DID 存在时，追加胶水信息
-                if (_glueCheckEnabled && !string.IsNullOrEmpty(_glueDid))
-                {
-                    testDataList.Add(new TestDataItem
-                    {
-                        NAME = "胶水DID",
-                        VALUE = _glueDid,
-                        TEST_RESULT = "PASS",
-                        MAX_VALUE = "",
-                        MIN_VALUE = "",
-                        STANDARD_VALUE = ""
-                    });
-                }
-
-                // 追加机台号（machineNoswitch=false 时跳过）
-                bool machineNoswitch = false;
-                bool.TryParse(g_DicMESConfig["SOFTWARE"]["machineNoswitch"], out machineNoswitch);
-                if (machineNoswitch)
-                {
-                    string machineNo = g_DicMESConfig["Setting"].ContainsKey("MACHINE_NO")
-                        ? g_DicMESConfig["Setting"]["MACHINE_NO"] : "";
-                    testDataList.Add(new TestDataItem
-                    {
-                        NAME = machineNo,
-                        VALUE = fixtureNo,
-                        TEST_RESULT = "PASS",
-                        MAX_VALUE = "",
-                        MIN_VALUE = "",
-                        STANDARD_VALUE = ""
-                    });
-                }
-
-                bool flag = FormHelper.TestDataCollect2MainChild(
-                    _mesUrl, _loginId, _clientId,
-                    lineNo, productName, projectName,
-                    shoporderNo, sfcValue, testStation,
-                    fixtureNo, "", "LOKI",
-                    testDataList,
-                    out string msg);
-
-                if (!flag)
-                {
-                    AddLogMessage(msg, Color.Red);
-                    return false;
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("TestDataCollect异常：" + ex.Message, Color.Red);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 第五步半：调用 MES Binding 接口扣料，成功后更新本地剩余数量
-        /// </summary>
-        private bool BindingDeduction(string sfcValue)
-        {
-            try
-            {
-                string shopOrder = g_DicMESConfig["Config"]["Resource"];
-                string station = g_DicMESConfig["Config"]["Operation"];
-                string loadId = g_DicMESConfig["Config"]["Load_ID"];
-                string line = g_DicMESConfig["Config"]["Line"];
-                string projectName = g_DicMESConfig["Config"]["PROJECT"];
-                string productName = g_DicMESConfig["Config"]["PRODUCT"];
-                string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
-
-                string msg;
-                bool ok = FormHelper.Binding(
-                    _mesUrl, _loginId, _clientId, sfcValue, shopOrder, station,
-                    loadId, line, projectName, productName, "1", schedulingId,
-                    "true", out msg);
-
-                if (!ok)
-                {
-                    AddLogMessage("Binding 扣料失败：" + msg, Color.Red);
-                    return false;
-                }
-
-                // 接口成功后：每行剩余数量减去每次扣减数
-                foreach (DataRow row in _partsTable.Rows)
-                {
-                    double remaining = Convert.ToDouble(row[ColumnRemaining]);
-                    double deduct = Convert.ToDouble(row[ColumnQty]);
-                    row[ColumnRemaining] = Math.Max(0.0, remaining - deduct);
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("Binding 扣料异常：" + ex.Message, Color.Red);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 第六步：调用 MES AddSfcKey 接口上报 Config 绑定结果，
-        /// 仅当 setting.ini [SOFTWARE] Config=true 时执行
-        /// </summary>
-        /// <param name="sfcValue">当前 SFC 条码</param>
-        /// <returns>成功返回 true</returns>
-        private bool UploadConfigBinding(string sfcValue)
-        {
-            bool configEnabled = g_DicMESConfig["SOFTWARE"].ContainsKey("Config")
-                && bool.TryParse(g_DicMESConfig["SOFTWARE"]["Config"], out bool ce) && ce;
-            if (!configEnabled) return true;
-
-            string dataName = g_DicMESConfig["SOFTWARE"].ContainsKey("addSfcKeyDataName")
-                ? g_DicMESConfig["SOFTWARE"]["addSfcKeyDataName"] : "";
-            string dataValue = ConfigCombox.SelectedItem?.ToString() ?? "";
-
-            if (string.IsNullOrWhiteSpace(dataName) || string.IsNullOrWhiteSpace(dataValue))
-            {
-                AddLogMessage("AddSfcKey跳过：DATA_NAME或DATA_VALUE为空", Color.Red);
-                return false;
-            }
-
-            bool flag = FormHelper.AddSfcKey(
-                _mesUrl, _loginId, _clientId,
-                sfcValue,
-                g_DicMESConfig["Config"]["StationID"],
-                g_DicMESConfig["Config"]["Operation"],
-                g_DicMESConfig["Config"]["SapShoporder"],
-                dataName,
-                dataValue,
-                g_DicMESConfig["Config"]["PROJECT_ID"],
-                g_DicMESConfig["Config"]["PRODUCT_ID"],
-                out string msg);
-
-            if (!flag)
-            {
-                AddLogMessage("AddSfcKey失败：" + msg, Color.Red);
-                return false;
-            }
-
-            return true;
-        }
-
-        /// <summary>
-        /// 第二步：胶水库存校验（GetAuxmStockList）
-        /// </summary>
-        /// <returns>校验成功返回 true，did 非空时缓存到 _glueDid</returns>
-        private bool ValidateGlueStock()
-        {
-            _glueCheckEnabled = true;
-            if (g_DicMESConfig.ContainsKey("SOFTWARE") && g_DicMESConfig["SOFTWARE"].ContainsKey("glueCheck"))
-            {
-                bool.TryParse(g_DicMESConfig["SOFTWARE"]["glueCheck"], out _glueCheckEnabled);
-            }
-            if (!_glueCheckEnabled) return true;
-
-            string machineNo = g_DicMESConfig["Setting"].ContainsKey("MACHINE_NO") ? g_DicMESConfig["Setting"]["MACHINE_NO"] : "";
-            string line = g_DicMESConfig["Config"]["Line"];
-            bool glueOk = FormHelper.GetAuxmStockList(_mesUrl, _loginId, _clientId, line, machineNo, out string did, out string glueMsg);
-
-            if (!glueOk || string.IsNullOrEmpty(did))
-            {
-                AddLogMessage("胶水校验失败：" + (string.IsNullOrEmpty(glueMsg) ? "did为空，无可用胶水" : glueMsg), Color.Red);
-                return false;
-            }
-
-            _glueDid = did;
-            AddLogMessage("胶水校验通过：did = " + did, Color.Green);
-            return true;
         }
 
         // ============================================================
@@ -868,624 +369,526 @@ namespace WindowsFormsApp
         }
 
         // ============================================================
-        // 小件数据管理
+        // SFC Log 校验
         // ============================================================
 
         /// <summary>
-        /// 从 MES 接口重新加载小件定义，清空并重建表格数据（原有绑定将丢失）
+        /// 扫码后调用 GetSfcLogListByParam 校验条码流向：
+        /// 1. 获取 SFC Log 列表
+        /// 2. 删去 logStation 与本地 logStation 一致的条目
+        /// 3. 取剩余第一条，检查 logAction=="REWORK" 且 remark 包含本地 logStation
+        /// 通过 → 继续过站 / 不通过 → 记录失败
         /// </summary>
-        private void RefreshSubDefs()
+        private bool ValidateSfcLog(string sfc)
         {
-            try
+            if (string.IsNullOrEmpty(_logStation))
             {
-                string StationName = g_DicMESConfig["Config"]["Operation"];
-                string loadId = g_DicMESConfig["Config"]["Load_ID"];
-
-                // 调 MES 接口获取小件定义列表
-                _allSubDefs = FormHelper.GetLoadSubsByLoadId(_mesUrl, _loginId, _clientId, loadId, StationName);
-
-                // 清空现有行，重新填充
-                _partsTable.Rows.Clear();
-                if (_allSubDefs != null)
-                {
-                    foreach (var item in _allSubDefs)
-                    {
-                        _partsTable.Rows.Add(
-                            item.Bydpn,      // 小件名称
-                            item.Did,         // 绑定的小件码（初始为空）
-                            item.Remarks,     // 总数（静态，不扣减）
-                            item.Remarks,     // 剩余数量（动态，会扣减）
-                            item.Qty,         // 每产品用量（每次扣减数）
-                            item.DidRule,     // 条码匹配规则
-                            item.Location,    // 小件位置号
-                            item.MinSurplus,  // 最小剩余数量
-                            item.StopQty,     // 停机数量
-                            item.ClientNo     // 料号
-                        );
-                    }
-                    AddLogMessage("GetLoadSubsByLoadId获取小件信息成功",Color.Green);
-                }
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("加载小件定义失败：" + ex.Message, Color.Red);
-            }
-        }
-
-        /// <summary>
-        /// 启动时从 MES 接口拉取小件定义和剩余数量
-        /// </summary>
-        private void LoadPartsFromApi()
-        {
-            _partsTable = new DataTable("Parts");
-            _partsTable.Columns.Add(ColumnBydpn, typeof(string));
-            _partsTable.Columns.Add(ColumnDid, typeof(string));
-            _partsTable.Columns.Add(ColumnRemarks, typeof(double));
-            _partsTable.Columns.Add(ColumnRemaining, typeof(double));
-            _partsTable.Columns.Add(ColumnQty, typeof(double));
-            _partsTable.Columns.Add(ColumnDidRule, typeof(string));
-            _partsTable.Columns.Add(ColumnLocation, typeof(string));
-            _partsTable.Columns.Add(ColumnMinSurplus, typeof(int));
-            _partsTable.Columns.Add(ColumnStopQty, typeof(string));
-            _partsTable.Columns.Add(ColumnClientNo, typeof(string));
-
-            string stationName = g_DicMESConfig["Config"]["Operation"];
-            string loadId = g_DicMESConfig["Config"]["Load_ID"];
-
-            List<SubMaterialDef> apiDefs = null;
-            try
-            {
-                apiDefs = FormHelper.GetLoadSubsByLoadId(_mesUrl, _loginId, _clientId, loadId, stationName);
-                _allSubDefs = apiDefs ?? new List<SubMaterialDef>();
-            }
-            catch (Exception ex)
-            {
-                AddLogMessage("获取小件定义失败：" + ex.Message, Color.Red);
-                return;
+                AddLogMessage("SFC Log校验跳过：未配置 logStation", Color.Orange);
+                return true; // 未配置则跳过校验
             }
 
-            if (apiDefs == null || apiDefs.Count == 0)
+            bool ok = FormHelper.GetSfcLogListByParam(
+                _mesUrl, _loginId, _clientId, sfc,
+                out JArray dataList, out string apiMsg);
+
+            if (!ok || dataList == null || dataList.Count == 0)
             {
-                AddLogMessage("接口返回小件定义为空", Color.Red);
-                return;
+                AddLogMessage($"SFC Log校验失败：GetSfcLogListByParam 无数据 — {apiMsg}", Color.Red);
+                BeginInvoke(new Action(() => MarkFail()));
+                return false;
             }
 
-            foreach (var item in apiDefs)
+            // 过滤：删去 logStation 与本地一致的条目
+            var filtered = new List<JToken>();
+            foreach (var item in dataList)
             {
-                _partsTable.Rows.Add(item.Bydpn, "", item.Remarks, item.Remarks, item.Qty,
-                    item.DidRule, item.Location, item.MinSurplus, item.StopQty, item.ClientNo);
-            }
-            AddLogMessage($"已从接口加载 {apiDefs.Count} 个小件定义", Color.Green);
-
-            // 逐条获取剩余数量和 Did
-            FetchAndUpdateQtyResiduals();
-        }
-
-        /// <summary>
-        /// 逐个调用 GetLoadUpByParams 获取每个小件的最新剩余数量和 Did，
-        /// 覆盖内存数据，并在数量不足时告警
-        /// </summary>
-        private void FetchAndUpdateQtyResiduals()
-        {
-            string shoporder = g_DicMESConfig["Config"]["Resource"];
-            string line = g_DicMESConfig["Config"]["Line"];
-            bool stopped = false;
-            int updatedCount = 0;
-
-            foreach (DataRow row in _partsTable.Rows)
-            {
-                string location = Convert.ToString(row[ColumnLocation]) ?? "";
-                string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
-                int stopQty;
-                int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
-
-                if (string.IsNullOrWhiteSpace(location))
+                string itemStation = item["SFC_LOG"]?["logStation"]?.ToString() ?? "";
+                if (!string.Equals(itemStation.Trim(), _logStation.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
-                    AddLogMessage($"[{bydpn}] 位置号为空，跳过获取剩余数量。", Color.Orange);
-                    continue;
-                }
-
-                var result = FormHelper.GetLoadUpByParams(
-                    _mesUrl, _loginId, _clientId, shoporder, location, line);
-
-                if (!result.Ok)
-                {
-                    AddLogMessage($"[{bydpn}] GetLoadUpByParams 网络异常，跳过。", Color.Orange);
-                    continue;
-                }
-
-                if (!string.IsNullOrEmpty(result.FailMessage))
-                {
-                    AddLogMessage($"接口返回失败：{result.FailMessage}", Color.Red);
-                    stopped = true;
-                    break;
-                }
-
-                if (!result.Found)
-                {
-                    string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
-                    double oldRemaining = Convert.ToDouble(row[ColumnRemaining]);
-                    if (!string.IsNullOrWhiteSpace(oldDid) || oldRemaining > 0)
-                    {
-                        row[ColumnDid] = DBNull.Value;
-                        row[ColumnRemaining] = 0;
-                        AddLogMessage($"[{bydpn}] 位置 {location} 接口返回小件信息为空，已清空本地 Did 和剩余数量。", Color.Blue);
-                    }
-                    AddLogMessage($"[{bydpn}] 位置 {location} 小件数量不足，请及时上料！", Color.Red);
-                    continue;
-                }
-
-                row[ColumnRemaining] = result.QtyResidual;
-                string localDid = Convert.ToString(row[ColumnDid]) ?? "";
-                string apiDid = result.Did ?? "";
-                if (!string.Equals(localDid.Trim(), apiDid.Trim(), StringComparison.OrdinalIgnoreCase))
-                {
-                    row[ColumnDid] = apiDid;
-                    if (string.IsNullOrWhiteSpace(apiDid))
-                    {
-                        AddLogMessage($"[{bydpn}] 接口返回小件码为空，已清空本地 [{localDid}]。", Color.Blue);
-                    }
-                    else
-                    {
-                        AddLogMessage($"[{bydpn}] 接口返回小件码 [{apiDid}]" +
-                            (string.IsNullOrWhiteSpace(localDid) ? "" : $"，覆盖本地 [{localDid}]") +
-                            "，已同步。", Color.Blue);
-                    }
-                }
-                updatedCount++;
-
-                if (result.QtyResidual <= stopQty)
-                {
-                    AddLogMessage($"[{bydpn}] 位置 {location} 剩余 {result.QtyResidual}（停机数量 {stopQty}），小件数量不足，请及时上料！", Color.Red);
-                }
-                else
-                {
-                    AddLogMessage($"[{bydpn}] 位置 {location} 剩余数量已更新：{result.QtyResidual}", Color.Green);
+                    filtered.Add(item);
                 }
             }
 
-            if (!stopped)
+            if (filtered.Count == 0)
             {
-                AddLogMessage($"剩余数量更新完成：共更新 {updatedCount} 个小件。", Color.Green);
+                AddLogMessage($"SFC Log校验失败：过滤后无剩余条目（所有 logStation 均为 [{_logStation}]）", Color.Red);
+                BeginInvoke(new Action(() => MarkFail()));
+                return false;
+            }
+
+            AddLogMessage($"SFC Log：原始 {dataList.Count} 条，过滤后剩余 {filtered.Count} 条", Color.Blue);
+
+            // 取第一条剩余的
+            var firstLog = filtered[0]["SFC_LOG"];
+            string logAction = firstLog["logAction"]?.ToString() ?? "";
+            string remark = firstLog["remark"]?.ToString() ?? "";
+
+            // 检查：logAction 必须为 REWORK，remark 必须包含本地 logStation
+            bool actionOk = string.Equals(logAction.Trim(), "REWORK", StringComparison.OrdinalIgnoreCase);
+            bool remarkOk = remark.Contains(_logStation);
+
+            // 记录第一条符合规则的 logStation，供 ChangeSfcStation 使用
+            _firstLogStation = firstLog["logStation"]?.ToString() ?? "";
+
+            if (actionOk && remarkOk)
+            {
+                _sfcLogPassed = true;
+                AddLogMessage($"SFC Log校验通过：logAction=REWORK, remark 包含 [{_logStation}]", Color.Green);
             }
             else
             {
-                AddLogMessage("因接口返回失败，已停止剩余数量更新流程。", Color.Red);
+                _sfcLogPassed = false;
+                string failReason = "";
+                if (!actionOk) failReason += $"logAction=[{logAction}]（期望REWORK）";
+                if (!remarkOk) failReason += (failReason.Length > 0 ? "；" : "") + $"remark 不包含 [{_logStation}]";
+                AddLogMessage($"SFC Log校验未通过：{failReason}（跳过ChangeSfcStation）", Color.Orange);
             }
-        }
-
-        /// <summary>
-        /// 设置底部状态栏文字
-        /// </summary>
-        private void SetStatus(string message)
-        {
-            lblStatus.Text = "状态：" + message;
-        }
-
-        /// <summary>
-        /// 将 DataTable 绑定到 DataGridView，设置中文列头，自动调整列宽和行高
-        /// </summary>
-        private void BindGrid()
-        {
-            dataGridViewParts.DataSource = _partsTable;
-
-            // 设置中文列头
-            dataGridViewParts.Columns[ColumnBydpn].HeaderText = "小件名称";
-            dataGridViewParts.Columns[ColumnDid].HeaderText = "小件码（待绑定）";
-            dataGridViewParts.Columns[ColumnRemarks].HeaderText = "总数";
-            dataGridViewParts.Columns[ColumnRemaining].HeaderText = "剩余数量";
-            dataGridViewParts.Columns[ColumnQty].HeaderText = "每次扣的数量";
-            dataGridViewParts.Columns[ColumnDidRule].HeaderText = "规则";
-            dataGridViewParts.Columns[ColumnLocation].HeaderText = "位置号";
-            dataGridViewParts.Columns[ColumnMinSurplus].HeaderText = "最小剩余";
-            dataGridViewParts.Columns[ColumnStopQty].HeaderText = "停机数量";
-            dataGridViewParts.Columns[ColumnClientNo].HeaderText = "料号";
-
-            // 自动调整列宽和行高以适应内容
-            dataGridViewParts.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells);
-            dataGridViewParts.AutoResizeRows(DataGridViewAutoSizeRowsMode.AllCells);
+            return true; // 无论是否符合，都继续后续流程
         }
 
         // ============================================================
-        // 小件上料页
+        // 扫码枪 TCP 连接管理
         // ============================================================
 
-        /// <summary>
-        /// 根据输入的小件码，匹配所有"未绑定且规则命中"的行，填充下拉框供用户选择
-        /// </summary>
-        private void RefreshMatchCandidates()
+        /// <summary>从配置读取扫码枪 IP/端口并建立连接</summary>
+        private void ConnectToScanner()
         {
-            string inputCode = txtInputCode.Text.Trim();
-            var candidates = new List<MatchCandidate>();
-
-            cmbMatches.DataSource = null;
-
-            if (string.IsNullOrWhiteSpace(inputCode))
-            {
-                SetStatus("请输入小件码后再匹配。");
-                return;
-            }
-
-            // 遍历所有行，筛选出规则匹配的行（含已绑定）
-            for (int i = 0; i < _partsTable.Rows.Count; i++)
-            {
-                DataRow row = _partsTable.Rows[i];
-                string existingCode = Convert.ToString(row[ColumnDid]).Trim();
-                string rule = Convert.ToString(row[ColumnDidRule]).Trim();
-                bool isBound = !string.IsNullOrEmpty(existingCode);
-
-                // 无规则则跳过
-                if (string.IsNullOrEmpty(rule))
-                    continue;
-                // 规则不匹配则跳过
-                if (!IsRuleMatch(inputCode, rule))
-                    continue;
-
-                string bydpn = Convert.ToString(row[ColumnBydpn]);
-
-                string prefix = isBound ? "⚠ 已绑定 | " : "";
-                candidates.Add(new MatchCandidate
-                {
-                    RowIndex = i,
-                    IsBound = isBound,
-                    DisplayText = string.Format(
-                        "{0}第 {1} 行 | 名称: {2} | 规则: {3}" + (isBound ? " | 已绑定: {4}" : ""),
-                        prefix, i + 1, bydpn, rule, existingCode)
-                });
-            }
-
-            // 绑定到下拉框
-            _populatingMatches = true;
-            cmbMatches.DisplayMember = nameof(MatchCandidate.DisplayText);
-            cmbMatches.ValueMember = nameof(MatchCandidate.RowIndex);
-            cmbMatches.DataSource = candidates;
-            cmbMatches.SelectedIndex = -1;
-            _populatingMatches = false;
-
-            if (candidates.Count == 0)
-            {
-                SetStatus("没有找到匹配项。请检查输入的小件码是否符合规则。");
-                return;
-            }
-
-            if (candidates.Count == 1 && !candidates[0].IsBound)
-            {
-                // 唯一匹配且未绑定 → 自动绑定
-                ExecuteBind(inputCode, candidates[0]);
-                return;
-            }
-
-            if (candidates.Count == 1 && candidates[0].IsBound)
-            {
-                // 唯一匹配且已绑定 → 弹窗确认上新小件
-                var single = candidates[0];
-                DataRow boundRow = _partsTable.Rows[single.RowIndex];
-                string oldDid = Convert.ToString(boundRow[ColumnDid]);
-                string boundBydpn = Convert.ToString(boundRow[ColumnBydpn]);
-                var dlgResult = MessageBox.Show(
-                    string.Format("该位置已绑定小件码 [{0}]（{1}）。\n是否更换为新小件码 [{2}]？\n\n点击[是]将先卸下旧小件，再上新的小件码。",
-                        oldDid, boundBydpn, inputCode),
-                    "上新小件确认",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
-
-                if (dlgResult == DialogResult.Yes)
-                {
-                    ReplaceAndLoadNew(inputCode, boundRow);
-                    txtInputCode.Clear();
-                    cmbMatches.DataSource = null;
-                }
-                else
-                {
-                    SetStatus("已取消上新小件。");
-                }
-                return;
-            }
-
-            BeginInvoke(new Action(() =>
-            {
-                cmbMatches.ShowDropDown();
-            }));
-            SetStatus(string.Format("找到 {0} 个匹配项，请从下拉框中选择。", candidates.Count));
+            _scanIp = g_DicMESConfig["Setting"]["scanip"];
+            int.TryParse(g_DicMESConfig["Setting"]["scanport"], out _scanPort);
+            Connect_Scan(uiLabel7);
         }
 
-        /// <summary>
-        /// 判断输入小件码是否命中规则组中的任意一个模板（分号分隔的多个规则）
-        /// </summary>
-        private bool IsRuleMatch(string inputCode, string ruleGroup)
+        /// <summary>创建 SimpleTcpClient 连接扫码枪，注册 DataReceived 回调，更新状态标签</summary>
+        private void Connect_Scan(UILabel uiLabel)
         {
-            if (string.IsNullOrWhiteSpace(inputCode) || string.IsNullOrWhiteSpace(ruleGroup))
-                return false;
-
-            string[] ruleItems = ruleGroup
-                .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (string ruleItem in ruleItems)
+            scanclient?.Disconnect();
+            scanclient = new SimpleTcpClient
             {
-                if (IsSinglePatternMatch(inputCode, ruleItem.Trim()))
-                    return true;
+                StringEncoder = Encoding.UTF8,
+                Delimiter = Encoding.UTF8.GetBytes("\r")[0]
+            };
+            SetSocketTimeout(scanclient);
+            scanclient.DataReceived += scanclient_DataReceived;
+            try
+            {
+                scanclient.Connect(_scanIp, _scanPort);
+                _scanConnected = true;
+                uiLabel.Text = "已连接";
+                uiLabel.BackColor = Color.DodgerBlue;
+                AddLogMessage("扫码枪连接成功", Color.Green);
             }
+            catch
+            {
+                _scanConnected = false;
+                uiLabel.Text = "未连接";
+                uiLabel.BackColor = Color.Red;
+                AddLogMessage("扫码枪连接失败", Color.Red);
+            }
+        }
 
+        /// <summary>启动扫码枪健康检查定时器：每 3 秒探测一次，断线自动重连</summary>
+        private void StartScanHealthCheck()
+        {
+            _scanHealthTimer = new System.Timers.Timer(3000);
+            _scanHealthTimer.Elapsed += (s, ev) =>
+            {
+                if (_scanReconnecting) return;
+
+                bool reachable = ProbeScanner();
+                if (_scanConnected && !reachable)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        AddLogMessage("检测到扫码枪已断开", Color.Red);
+                        SetScanStatus(false);
+                    }));
+                }
+                else if (!_scanConnected && reachable)
+                {
+                    BeginInvoke(new Action(() => AddLogMessage("检测到扫码枪端口可达，开始重连")));
+                    _ = ReconnectScanner();
+                }
+            };
+            _scanHealthTimer.Start();
+        }
+
+        /// <summary>用短超时 TcpClient 探测扫码枪端口是否可达</summary>
+        private bool ProbeScanner()
+        {
+            try
+            {
+                using (var client = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = client.BeginConnect(_scanIp, _scanPort, null, null);
+                    bool connected = ar.AsyncWaitHandle.WaitOne(1000);
+                    try { client.EndConnect(ar); } catch { }
+                    if (connected && client.Connected) return true;
+                }
+            }
+            catch (Exception) { }
             return false;
         }
 
-        /// <summary>
-        /// 判断输入码是否匹配单条模板规则：
-        /// 长度必须一致，? 匹配任意字符，非 ? 字符忽略大小写严格相等
-        /// </summary>
-        private bool IsSinglePatternMatch(string inputCode, string pattern)
+        /// <summary>扫码枪重连：断开旧连接 → 新建客户端 → 最多 5 次尝试，每次间隔 3 秒</summary>
+        private async Task ReconnectScanner()
         {
-            if (string.IsNullOrWhiteSpace(inputCode) || string.IsNullOrWhiteSpace(pattern))
-                return false;
-            if (inputCode.Length != pattern.Length)
-                return false;
+            _scanReconnecting = true;
+            var token = _cts?.Token ?? CancellationToken.None;
 
-            for (int i = 0; i < pattern.Length; i++)
+            for (int i = 1; i <= 5; i++)
             {
-                char ruleChar = pattern[i];
-                char inputChar = inputCode[i];
-
-                if (ruleChar == '?')
-                    continue;
-                if (char.ToUpperInvariant(ruleChar) != char.ToUpperInvariant(inputChar))
-                    return false;
+                if (token.IsCancellationRequested) break;
+                try
+                {
+                    await Task.Run(() =>
+                    {
+                        try { scanclient?.Disconnect(); } catch (Exception) { }
+                        try { scanclient?.Dispose(); } catch (Exception) { }
+                        scanclient = new SimpleTcpClient
+                        {
+                            StringEncoder = Encoding.UTF8,
+                            Delimiter = Encoding.UTF8.GetBytes("\r")[0]
+                        };
+                        SetSocketTimeout(scanclient);
+                        scanclient.DataReceived += scanclient_DataReceived;
+                        scanclient.Connect(_scanIp, _scanPort);
+                    }, token);
+                    _scanReconnecting = false;
+                    AddLogMessage($"扫码枪重连成功（第{i}次尝试）", Color.Green);
+                    SetScanStatus(true);
+                    return;
+                }
+                catch (Exception) { }
+                if (i < 5)
+                {
+                    try { await Task.Delay(3000, token); }
+                    catch (TaskCanceledException) { break; }
+                }
             }
 
-            return true;
+            _scanReconnecting = false;
+            AddLogMessage("扫码枪重连失败，已尝试5次", Color.Red);
+            SetScanStatus(false);
         }
 
         /// <summary>
-        /// 执行绑定：将用户输入的小件码写入对应 DataRow 的 Did 列；
-        /// 绑定成功后立即落盘并刷新界面
+        /// 扫码枪数据接收回调（TCP 子线程）：
+        /// 清洗条码 → 回显 SFC 输入框 → SFC Log 校验 → 触发过站流程
         /// </summary>
-        /// <summary>
-        /// 执行绑定：将小件码写入目标行，落盘并清空输入
-        /// </summary>
-        private void ExecuteBind(string inputCode, MatchCandidate candidate)
+        private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
         {
-            // 防止同一个小件码重复绑定到多行
-            bool alreadyBound = _partsTable.Rows.Cast<DataRow>()
-                .Any(row => string.Equals(
-                    Convert.ToString(row[ColumnDid]).Trim(),
-                    inputCode,
-                    StringComparison.OrdinalIgnoreCase));
+            string sfc = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
 
-            if (alreadyBound)
+            if (this.InvokeRequired)
             {
-                MessageBox.Show("该小件码已经绑定过，不能重复使用。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                SetStatus("绑定失败：输入的小件码已存在于表格第二列。");
+                this.BeginInvoke(new Action(() =>
+                {
+                    SFC_UITextBox.Text = sfc;
+                    Task.Run(() =>
+                    {
+                        ValidateSfcLog(sfc);
+                        ruleSFC(sfc);
+                    });
+                }));
+            }
+        }
+
+        /// <summary>更新扫码枪状态标签（线程安全）</summary>
+        private void SetScanStatus(bool connected)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => SetScanStatus(connected)));
                 return;
             }
+            _scanConnected = connected;
+            uiLabel7.Text = connected ? "已连接" : "未连接";
+            uiLabel7.BackColor = connected ? Color.DodgerBlue : Color.Red;
+        }
 
-            DataRow targetRow = _partsTable.Rows[candidate.RowIndex];
+        // ============================================================
+        // CCD TCP 连接管理（始终启用，无开关）
+        // ============================================================
 
-            // 已绑定行 → 弹窗确认上新小件
-            if (candidate.IsBound)
+        /// <summary>从配置读取 CCD IP/端口并建立连接</summary>
+        private void ConnectToCcd()
+        {
+            _ccdIp = g_DicMESConfig["CCD"]["ip"];
+            int.TryParse(g_DicMESConfig["CCD"]["port"], out _ccdPort);
+            Connect_Ccd(uiLabel4);
+        }
+
+        /// <summary>创建 SimpleTcpClient 连接 CCD 服务端，注册 DataReceived 回调（预留），更新状态标签</summary>
+        private void Connect_Ccd(UILabel uiLabel)
+        {
+            try { _ccdClient?.Disconnect(); } catch (Exception) { }
+            try { _ccdClient?.Dispose(); } catch (Exception) { }
+            _ccdClient = new SimpleTcpClient
             {
-                string oldDid = Convert.ToString(targetRow[ColumnDid]);
-                string boundBydpn = Convert.ToString(targetRow[ColumnBydpn]);
-                var dlgResult = MessageBox.Show(
-                    string.Format("该位置已绑定小件码 [{0}]（{1}）。\n是否更换为新小件码 [{2}]？\n\n点击[是]将先卸下旧小件，再上新的小件码。",
-                        oldDid, boundBydpn, inputCode),
-                    "上新小件确认",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
+                StringEncoder = Encoding.UTF8,
+                Delimiter = Encoding.UTF8.GetBytes("\n")[0]
+            };
+            _ccdClient.DataReceived += ccdClient_DataReceived;
+            try
+            {
+                _ccdClient.Connect(_ccdIp, _ccdPort);
+                _ccdConnected = true;
+                uiLabel.Text = "已连接";
+                uiLabel.BackColor = Color.DodgerBlue;
+                AddLogMessage("CCD连接成功", Color.Green);
+            }
+            catch
+            {
+                _ccdConnected = false;
+                uiLabel.Text = "未连接";
+                uiLabel.BackColor = Color.Red;
+                AddLogMessage("CCD连接失败", Color.Red);
+            }
+        }
 
-                if (dlgResult == DialogResult.Yes)
+        /// <summary>启动 CCD 健康检查定时器：每 3 秒探测一次，断线自动重连</summary>
+        private void StartCcdHealthCheck()
+        {
+            _ccdHealthTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+            _ccdHealthTimer.Tick += (s, ev) =>
+            {
+                if (_ccdReconnecting) return;
+
+                bool reachable = ProbeCcd();
+                if (_ccdConnected && !reachable)
                 {
-                    ReplaceAndLoadNew(inputCode, targetRow);
+                    AddLogMessage("检测到CCD已断开", Color.Red);
+                    SetCcdStatus(false);
+                }
+                else if (!_ccdConnected && reachable)
+                {
+                    AddLogMessage("检测到CCD端口可达，开始重连");
+                    _ = ReconnectCcd();
+                }
+            };
+            _ccdHealthTimer.Start();
+        }
+
+        /// <summary>用短超时 TcpClient 探测 CCD 端口是否可达</summary>
+        private bool ProbeCcd()
+        {
+            try
+            {
+                using (var client = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = client.BeginConnect(_ccdIp, _ccdPort, null, null);
+                    if (ar.AsyncWaitHandle.WaitOne(1000))
+                    {
+                        client.EndConnect(ar);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception) { }
+            return false;
+        }
+
+        /// <summary>CCD 重连：断开旧连接 → 新建客户端 → 最多 5 次尝试，每次间隔 3 秒</summary>
+        private async Task ReconnectCcd()
+        {
+            _ccdReconnecting = true;
+            var token = _cts?.Token ?? CancellationToken.None;
+
+            for (int i = 1; i <= 5; i++)
+            {
+                if (token.IsCancellationRequested) break;
+                try
+                {
+                    try { _ccdClient?.Disconnect(); } catch (Exception) { }
+                    try { _ccdClient?.Dispose(); } catch (Exception) { }
+                    _ccdClient = new SimpleTcpClient
+                    {
+                        StringEncoder = Encoding.UTF8,
+                        Delimiter = Encoding.UTF8.GetBytes("\n")[0]
+                    };
+                    _ccdClient.DataReceived += ccdClient_DataReceived;
+                    _ccdClient.Connect(_ccdIp, _ccdPort);
+                    _ccdReconnecting = false;
+                    AddLogMessage($"CCD重连成功（第{i}次尝试）", Color.Green);
+                    SetCcdStatus(true);
+                    return;
+                }
+                catch (Exception) { }
+                if (i < 5)
+                {
+                    try { await Task.Delay(3000, token); }
+                    catch (TaskCanceledException) { break; }
+                }
+            }
+
+            _ccdReconnecting = false;
+            AddLogMessage("CCD重连失败，已尝试5次", Color.Red);
+            SetCcdStatus(false);
+        }
+
+        /// <summary>
+        /// CCD 数据接收回调（TCP 子线程）：
+        /// 解析结果 → OK: AddSfcKey + Complete → NG: AddSfcKey + NcComplete
+        /// </summary>
+        private void ccdClient_DataReceived(object sender, SimpleTCP.Message e)
+        {
+            string raw = e.MessageString
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault()?.Replace(" ", "") ?? "";
+
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (!_ccdArmed)
+                    {
+                        AddLogMessage($"收到CCD数据但未就绪，忽略：{raw}", Color.Gray);
+                        return;
+                    }
+
+                    _ccdArmed = false;
+                    ProcessCcdResult(raw);
+                }));
+            }
+        }
+
+        /// <summary>
+        /// 解析 CCD 结果（格式 OK;... 或 NG;...）
+        /// OK → AddSfcKey + Complete → PASS
+        /// NG → AddSfcKey + NcComplete → FAIL
+        /// </summary>
+        private void ProcessCcdResult(string raw)
+        {
+            string[] parts = raw.Split(';');
+            string judgement = parts.Length > 0 ? parts[0].ToUpper() : "";
+            string sfc = _ccdPendingSfc;
+
+            string dataName = g_DicMESConfig["Setting"].ContainsKey("ccdDataName")
+                ? g_DicMESConfig["Setting"]["ccdDataName"] : "CCD";
+
+            // AddSfcKey 公共参数
+            string stationId = g_DicMESConfig["Config"]["StationID"];
+            string operation = g_DicMESConfig["Config"]["Operation"];
+            string shopOrder = g_DicMESConfig["Config"]["SapShoporder"];
+            string projectId = g_DicMESConfig["Config"]["PROJECT_ID"];
+            string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
+            string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
+
+            // 先上报 CCD 结果到 MES
+            FormHelper.AddSfcKey(
+                _mesUrl, _loginId, _clientId,
+                sfc, stationId, operation, shopOrder,
+                dataName, raw,
+                projectId, productId,
+                out string addSfcMsg);
+            AddLogMessage($"AddSfcKey CCD结果上报：{addSfcMsg}", Color.Blue);
+
+            if (judgement == "OK")
+            {
+                AddLogMessage($"CCD判定 OK：{raw}", Color.Green);
+
+                string remark = g_DicMESConfig["Config"].ContainsKey("Remark")
+                    ? g_DicMESConfig["Config"]["Remark"] : "";
+                bool cplOk = FormHelper.Complete(
+                    _mesUrl, _loginId, _clientId, sfc,
+                    stationId, schedulingId, remark, out string cplMsg);
+
+                if (cplOk)
+                {
+                    AddLogMessage("Complete成功", Color.Green);
+                    _passCount++;
+                    SaveCounters();
+                    SetPassLabel();
+                    PassCount.Text = _passCount.ToString();
                 }
                 else
                 {
-                    SetStatus("已取消上新小件。");
+                    AddLogMessage($"Complete失败：{cplMsg}", Color.Red);
+                    MarkFail();
                 }
-                txtInputCode.Clear();
-                cmbMatches.DataSource = null;
-                return;
             }
-
-            // 未绑定的新行 → 先调 LoadMaterialUp 上料，再绑定
-            string location = Convert.ToString(targetRow[ColumnLocation]) ?? "";
-            string bydpn = Convert.ToString(targetRow[ColumnBydpn]) ?? "";
-            string remarks = Convert.ToString(targetRow[ColumnRemarks]) ?? "0";
-            string station = g_DicMESConfig["Config"]["Operation"];
-            string shoporder = g_DicMESConfig["Config"]["Resource"];
-            string line = g_DicMESConfig["Config"]["Line"];
-            string loadId = g_DicMESConfig["Config"]["Load_ID"];
-            string dateCode = g_DicMESConfig["Config"]["LoginID"];
-
-            string loadUpMsg;
-            bool loadUpOk = FormHelper.LoadMaterialUp(
-                _mesUrl, _loginId, _clientId, loadId, location, bydpn, station,
-                line, shoporder, inputCode, remarks, dateCode, out loadUpMsg);
-
-            if (!loadUpOk)
+            else // NG 或其他
             {
-                AddLogMessage($"LoadMaterialUp 失败：{loadUpMsg}", Color.Red);
-                MessageBox.Show($"上料失败：{loadUpMsg}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                SetStatus("上料失败，请重试。");
-                return;
-            }
-            AddLogMessage($"LoadMaterialUp 成功：小件码 [{inputCode}] 已上到 {bydpn}（{location}）", Color.Green);
+                AddLogMessage($"CCD判定 NG：{raw}", Color.Red);
 
-            targetRow[ColumnDid] = inputCode;
-            RefreshQtyAfterLoadUp(targetRow);  // 上料后获取最新剩余数量
-            dataGridViewParts.Refresh();
+                bool ncOk = FormHelper.NcComplete(
+                    _mesUrl, _loginId, _clientId, sfc,
+                    stationId, "CCD NG", raw, "CCD",
+                    schedulingId, out string ncMsg);
 
-            string boundPartName = Convert.ToString(targetRow[ColumnBydpn]);
-            SetStatus(string.Format("绑定成功：小件码 {0} 已写入 [{1}] 这一行。", inputCode, boundPartName));
-
-            txtInputCode.Clear();
-            cmbMatches.DataSource = null;
-        }
-
-        /// <summary>
-        /// 上新小件：先调 UpdateLoadDidInfo 下旧小件，再调 LoadMaterialUp 上新的小件码
-        /// </summary>
-        private void ReplaceAndLoadNew(string newDid, DataRow row)
-        {
-            string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
-            string location = Convert.ToString(row[ColumnLocation]) ?? "";
-            string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
-            int stopQty;
-            int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
-            double remaining = Convert.ToDouble(row[ColumnRemaining]);
-
-            string station = g_DicMESConfig["Config"]["Operation"];
-            string shoporder = g_DicMESConfig["Config"]["Resource"];
-            string line = g_DicMESConfig["Config"]["Line"];
-            string loadId = g_DicMESConfig["Config"]["Load_ID"];
-            string dateCode = g_DicMESConfig["Config"]["LoginID"];
-
-            // 判断 STATE：≤stopQty 或 ==0 → 用完(1)，否则 → 未完卸下(2)
-            string state = (remaining <= stopQty || remaining == 0) ? "1" : "2";
-            string stateDesc = state == "1" ? "用完" : "未完卸下";
-
-            AddLogMessage($"开始上新小件：旧码 [{oldDid}] → 新码 [{newDid}]（{bydpn}，STATE={state}（{stateDesc}））", Color.Blue);
-
-            // 1. 下旧小件
-            string msg1;
-            bool ok1 = FormHelper.UpdateLoadDidInfo(
-                _mesUrl, _loginId, _clientId, oldDid, station, shoporder, line,
-                state, loadId, location, out msg1);
-
-            if (!ok1)
-            {
-                AddLogMessage($"UpdateLoadDidInfo 失败：{msg1}", Color.Red);
-                MessageBox.Show($"下旧小件失败：{msg1}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            AddLogMessage($"UpdateLoadDidInfo 成功：旧小件 [{oldDid}] STATE={state}（{stateDesc}）", Color.Green);
-
-            // 下料成功后立即清除旧 Did
-            row[ColumnDid] = DBNull.Value;
-
-            // 2. 上新的小件码
-            string remarks = Convert.ToString(row[ColumnRemarks]) ?? "0";
-            string msg2;
-            bool ok2 = FormHelper.LoadMaterialUp(
-                _mesUrl, _loginId, _clientId, loadId, location, bydpn, station,
-                line, shoporder, newDid, remarks, dateCode, out msg2);
-
-            if (!ok2)
-            {
-                AddLogMessage($"LoadMaterialUp 失败：{msg2}", Color.Red);
-                MessageBox.Show($"上新小件失败：{msg2}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            AddLogMessage($"LoadMaterialUp 成功：新小件 [{newDid}] 已上到 {bydpn}（{location}）", Color.Green);
-
-            // 3. 更新本地行
-            row[ColumnDid] = newDid;
-            RefreshQtyAfterLoadUp(row);  // 上料后获取最新剩余数量
-            dataGridViewParts.Refresh();
-
-            SetStatus($"上新小件成功：{bydpn} [{oldDid}] → [{newDid}]");
-        }
-
-        /// <summary>
-        /// 上料后调 GetLoadUpByParams 获取最新剩余数量，更新本地并检查告警
-        /// </summary>
-        private void RefreshQtyAfterLoadUp(DataRow row)
-        {
-            string location = Convert.ToString(row[ColumnLocation]) ?? "";
-            string bydpn = Convert.ToString(row[ColumnBydpn]) ?? "";
-            int stopQty;
-            int.TryParse(Convert.ToString(row[ColumnStopQty]) ?? "0", out stopQty);
-
-            if (string.IsNullOrWhiteSpace(location)) return;
-
-            string shoporder = g_DicMESConfig["Config"]["Resource"];
-            string line = g_DicMESConfig["Config"]["Line"];
-
-            var result = FormHelper.GetLoadUpByParams(
-                _mesUrl, _loginId, _clientId, shoporder, location, line);
-
-            if (!result.Ok || !string.IsNullOrEmpty(result.FailMessage)) return;
-
-            if (!result.Found)
-            {
-                // LoadUps 为空 → 清空本地 Did 和剩余数量
-                string oldDid = Convert.ToString(row[ColumnDid]) ?? "";
-                double oldRemaining = Convert.ToDouble(row[ColumnRemaining]);
-                if (!string.IsNullOrWhiteSpace(oldDid) || oldRemaining > 0)
-                {
-                    row[ColumnDid] = DBNull.Value;
-                    row[ColumnRemaining] = 0;
-                    AddLogMessage($"[{bydpn}] 位置 {location} 接口返回小件信息为空，已清空本地 Did 和剩余数量。", Color.Blue);
-                }
-                AddLogMessage($"[{bydpn}] 位置 {location} 获取最新数量为空，小件数量不足，请及时上料！", Color.Red);
-                return;
-            }
-
-            row[ColumnRemaining] = result.QtyResidual;
-
-            // 接口返回 Did 与本地不一致时用接口值覆盖（含清空）
-            string localDid = Convert.ToString(row[ColumnDid]) ?? "";
-            string apiDid = result.Did ?? "";
-            if (!string.Equals(localDid.Trim(), apiDid.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                row[ColumnDid] = apiDid;
-                if (string.IsNullOrWhiteSpace(apiDid))
-                {
-                    AddLogMessage($"[{bydpn}] 接口返回小件码为空，已清空本地 [{localDid}]。", Color.Blue);
-                }
+                if (ncOk)
+                    AddLogMessage("NcComplete成功", Color.Green);
                 else
+                    AddLogMessage($"NcComplete失败：{ncMsg}", Color.Red);
+
+                MarkFail();
+            }
+
+            // 仅当 SFC Log 校验通过时：变更工站 + 补充 AddSfcKey
+            if (_sfcLogPassed)
+            {
+                // ChangeSfcStation：工站名传第一条符合规则的 logStation
+                bool changeOk = FormHelper.ChangeSfcStation(
+                    _mesUrl, _loginId, _clientId, sfc,
+                    _firstLogStation, out string changeMsg);
+                if (changeOk)
+                    AddLogMessage($"ChangeSfcStation成功：→ [{_firstLogStation}]", Color.Green);
+                else
+                    AddLogMessage($"ChangeSfcStation失败：{changeMsg}", Color.Red);
+
+                // 补充 AddSfcKey：DATA_NAME 本地维护，DATA_VALUE 传 CCD 信息
+                string extraDataName = g_DicMESConfig["SOFTWARE"].ContainsKey("addSfcKeyDataName")
+                    ? g_DicMESConfig["SOFTWARE"]["addSfcKeyDataName"] : "";
+                if (!string.IsNullOrEmpty(extraDataName))
                 {
-                    AddLogMessage($"[{bydpn}] 接口返回小件码 [{apiDid}]" +
-                        (string.IsNullOrWhiteSpace(localDid) ? "" : $"，覆盖本地 [{localDid}]") +
-                        "，已同步。", Color.Blue);
+                    FormHelper.AddSfcKey(
+                        _mesUrl, _loginId, _clientId,
+                        sfc, stationId, operation, shopOrder,
+                        extraDataName, raw,
+                        projectId, productId,
+                        out string extraMsg);
+                    AddLogMessage($"补充AddSfcKey（{extraDataName}）：{extraMsg}", Color.Blue);
                 }
             }
-
-            if (result.QtyResidual <= stopQty)
-            {
-                AddLogMessage($"[{bydpn}] 位置 {location} 上料后剩余 {result.QtyResidual} ≤ 停机数量 {stopQty}，小件数量不足，请及时上料！", Color.Red);
-            }
-            else
-            {
-                AddLogMessage($"[{bydpn}] 位置 {location} 上料后剩余数量：{result.QtyResidual}", Color.Green);
-            }
         }
 
-        private void cmbMatches_SelectedIndexChanged(object sender, EventArgs e)
+        /// <summary>更新 CCD 状态标签（线程安全）</summary>
+        private void SetCcdStatus(bool connected)
         {
-            if (_populatingMatches)
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => SetCcdStatus(connected)));
                 return;
-
-            string inputCode = txtInputCode.Text.Trim();
-            if (string.IsNullOrWhiteSpace(inputCode))
-                return;
-
-            if (cmbMatches.SelectedItem == null)
-                return;
-
-            var selectedCandidate = (MatchCandidate)cmbMatches.SelectedItem;
-            ExecuteBind(inputCode, selectedCandidate);
+            }
+            _ccdConnected = connected;
+            uiLabel4.Text = connected ? "已连接" : "未连接";
+            uiLabel4.BackColor = connected ? Color.DodgerBlue : Color.Red;
         }
 
         /// <summary>
-        /// ConfigCombox 选择变更时，保存到 setting.ini
+        /// 利用反射设置 SimpleTcpClient 内部 TcpClient 的 SendTimeout / ReceiveTimeout
+        /// 防止断开连接时卡住 UI 线程
         /// </summary>
-        private void ConfigCombox_SelectedIndexChanged(object sender, EventArgs e)
+        private void SetSocketTimeout(SimpleTcpClient client, int timeoutMs = 2000)
         {
-            if (ConfigCombox.SelectedItem != null)
+            try
             {
-                new ConfigService().SaveSelectedConfig(ConfigCombox.SelectedItem.ToString());
+                var t = client.GetType();
+                var prop = t.GetProperty("Client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("_client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("tcpClient",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (prop != null && prop.GetValue(client) is System.Net.Sockets.TcpClient tcp)
+                {
+                    tcp.SendTimeout = timeoutMs;
+                    tcp.ReceiveTimeout = timeoutMs;
+                }
             }
-        }
-
-        /// <summary>
-        /// 小件码输入框按回车时触发匹配
-        /// </summary>
-        private void txtInputCode_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                RefreshMatchCandidates();
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-            }
+            catch (Exception) { }
         }
     }
 }
