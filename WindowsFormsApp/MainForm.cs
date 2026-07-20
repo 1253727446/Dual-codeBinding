@@ -1,13 +1,11 @@
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using SimpleTCP;
 using Sunny.UI;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Media;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -30,12 +28,20 @@ namespace WindowsFormsApp
         private string _clientId;
 
         // ========== 过站计数器 ==========
-        /// <summary>当班过站成功计数</summary>
-        private int _passCount = 0;
-        /// <summary>当班过站失败计数</summary>
+        /// <summary>过站失败计数</summary>
         private int _failCount = 0;
-        /// <summary>上次换班日期（防止同一班次重复触发）</summary>
-        private DateTime _lastShiftDate = DateTime.MinValue;
+        /// <summary>当班过站产出（只计PASS）</summary>
+        private int _currentShiftOutput = 0;
+        /// <summary>上班级过站产出</summary>
+        private int _lastShiftOutput = 0;
+        /// <summary>当前班次开始时间</summary>
+        private DateTime _shiftStartTime = DateTime.MinValue;
+        /// <summary>上次换班时间（防止同一班次重复触发）</summary>
+        private DateTime _lastShiftChangeTime = DateTime.MinValue;
+        /// <summary>白班开始小时（默认8）</summary>
+        private int _dayShiftStartHour = 8;
+        /// <summary>夜班开始小时（默认20）</summary>
+        private int _nightShiftStartHour = 20;
         /// <summary>换班检查定时器</summary>
         private System.Windows.Forms.Timer _shiftTimer;
         /// <summary>过站成功音效</summary>
@@ -43,22 +49,6 @@ namespace WindowsFormsApp
         /// <summary>过站失败音效</summary>
         private SoundPlayer _failSound;
 
-        // ========== 扫码枪连接 ==========
-        /// <summary>扫码枪 TCP 客户端</summary>
-        private SimpleTcpClient scanclient;
-        /// <summary>扫码枪是否已连接</summary>
-        private bool _scanConnected;
-        /// <summary>扫码枪是否正在重连中</summary>
-        private bool _scanReconnecting;
-        /// <summary>扫码枪 IP / 端口（缓存）</summary>
-        private string _scanIp;
-        private int _scanPort;
-        /// <summary>扫码枪健康检查定时器</summary>
-        private System.Timers.Timer _scanHealthTimer;
-        /// <summary>扫码枪最后一次收到数据的时间</summary>
-        private DateTime _lastScanDataTime = DateTime.MinValue;
-        /// <summary>健康检查连续失败计数（需连续2次才触发重连）</summary>
-        private int _scanFailCount = 0;
         /// <summary>后台任务取消令牌</summary>
         private CancellationTokenSource _cts;
 
@@ -84,6 +74,7 @@ namespace WindowsFormsApp
         public MainForm()
         {
             InitializeComponent();
+
             g_DicMESConfig = new ConfigService().LoadAllConfig();
             _cts = new CancellationTokenSource();
             _passSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Pass.wav"));
@@ -93,23 +84,41 @@ namespace WindowsFormsApp
             _resultTimer = new System.Windows.Forms.Timer { Interval = 2000 };
             _resultTimer.Tick += (s, e) => { _resultTimer.Stop(); EnterWaitingState(); };
 
+            // 注册 USB 扫码枪回车事件（键盘模式）
+            SFC_UITextBox.KeyDown += SFC_UITextBox_KeyDown;
+            uiTextBox1.KeyDown += uiTextBox1_KeyDown;
+
+            // 日志框不隐藏选区，保证 ScrollToCaret 始终有效
+            uiRichTextBox1.HideSelection = false;
+
             // 注册重置按钮
             uiButton1.Click += uiButton1_Click;
         }
 
         /// <summary>
-        /// 窗体加载：缓存配置 → 初始化参数 → 连接设备 → 启动健康检查/定时器 → 注册关闭事件
+        /// 窗体加载：缓存配置 → 初始化参数 → 加载计数器 → 初始化班次 → 启动定时器 → 注册关闭事件
         /// </summary>
         private void Form1_Load(object sender, EventArgs e)
         {
             CacheConfig();               // 缓存 MES 接口 URL / LoginID / ClientID
-            InitSettings();              // 读取设备、工站等本地配置
+            InitSettings();              // 读取设备、工站、班次等本地配置
             LoadCounters();              // 从 counters.json 恢复过站计数器
-            ConnectToScanner();          // 连接扫码枪 TCP
-            StartScanHealthCheck();      // 启动扫码枪健康检查/自动重连
+            InitializeShiftState();      // 初始化当前班次状态
             StartShiftTimer();           // 启动换班检查定时器（8:00 / 20:00）
             CheckRecoveryState();        // 检查是否有未完成的绑定流程需要恢复
             this.FormClosing += MainForm_FormClosing;  // 注册关闭事件释放资源
+            this.Shown += MainForm_Shown;               // 窗体完全显示后确保焦点
+        }
+
+        /// <summary>窗体完全显示后确保 SFC_UITextBox 获得焦点</summary>
+        private void MainForm_Shown(object sender, EventArgs e)
+        {
+            // 如果当前是等待状态，强制焦点到镭雕码输入框
+            if (_state == BindState.Waiting)
+            {
+                SFC_UITextBox.Focus();
+                SFC_UITextBox.Select();
+            }
         }
 
         /// <summary>
@@ -127,16 +136,20 @@ namespace WindowsFormsApp
         /// </summary>
         private void InitSettings()
         {
-            // 扫码枪配置
-            _scanIp = g_DicMESConfig["Setting"]["scanip"];
-            int.TryParse(g_DicMESConfig["Setting"]["scanport"], out _scanPort);
+            var cfg = g_DicMESConfig["Config"];
+            var setting = g_DicMESConfig["Setting"];
 
             // 顶部信息栏：静态标签保持设计器默认值，动态值标签填入配置
-            var cfg = g_DicMESConfig["Config"];
             uiLabel9.Text = cfg.ContainsKey("PROJECT") ? cfg["PROJECT"] : "";            // 项目
             uiLabel11.Text = cfg.ContainsKey("Line") ? cfg["Line"] : "";                 // 线体
             uiLabel13.Text = cfg.ContainsKey("Resource") ? cfg["Resource"] : "";         // 工单
             uiLabel15.Text = cfg.ContainsKey("Operation") ? cfg["Operation"] : "";       // 工站
+
+            // 班次配置（默认白班8:00-20:00，夜班20:00-次日8:00）
+            if (setting.ContainsKey("dayShiftStart"))
+                int.TryParse(setting["dayShiftStart"], out _dayShiftStartHour);
+            if (setting.ContainsKey("nightShiftStart"))
+                int.TryParse(setting["nightShiftStart"], out _nightShiftStartHour);
         }
 
         /// <summary>
@@ -150,10 +163,16 @@ namespace WindowsFormsApp
                 {
                     var json = File.ReadAllText(_countersPath);
                     var data = JsonConvert.DeserializeObject<dynamic>(json);
-                    _passCount = (int)data.pass;
-                    _failCount = (int)data.fail;
-                    PassCount.Text = _passCount.ToString();
+                    _failCount = (int?)data.fail ?? 0;
+                    _currentShiftOutput = (int?)data.currentShiftOutput ?? 0;
+                    _lastShiftOutput = (int?)data.lastShiftOutput ?? 0;
+                    string savedTime = (string)data.shiftStartTime;
+                    if (!string.IsNullOrEmpty(savedTime) && DateTime.TryParse(savedTime, out DateTime parsedTime))
+                        _shiftStartTime = parsedTime;
+
                     FailCount.Text = _failCount.ToString();
+                    uiLabel4.Text = _currentShiftOutput.ToString();
+                    OutPut.Text = _lastShiftOutput.ToString();
                 }
             }
             catch (Exception) { }
@@ -166,14 +185,20 @@ namespace WindowsFormsApp
         {
             try
             {
-                var data = new { pass = _passCount, fail = _failCount };
+                var data = new
+                {
+                    fail = _failCount,
+                    currentShiftOutput = _currentShiftOutput,
+                    lastShiftOutput = _lastShiftOutput,
+                    shiftStartTime = _shiftStartTime.ToString("yyyy-MM-dd HH:mm:ss")
+                };
                 File.WriteAllText(_countersPath, JsonConvert.SerializeObject(data));
             }
             catch (Exception) { }
         }
 
         /// <summary>
-        /// 启动换班检查定时器，每 30 秒检查一次是否到达 8:00 或 20:00 换班时间
+        /// 启动换班检查定时器，每 30 秒检查一次是否到达白班/夜班换班时间
         /// </summary>
         private void StartShiftTimer()
         {
@@ -183,40 +208,43 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 检查当前时间是否到达换班点（8:00 或 20:00），
-        /// 到达时将 PassCount 值赋给 OutPut，然后清零 PassCount 和 FailCount
+        /// 检查当前时间是否到达换班点（白班开始 / 夜班开始），
+        /// 到达时将当班产出转移到上班产出，清零当班产出
         /// </summary>
         private void CheckShiftChange()
         {
             DateTime now = DateTime.Now;
-            DateTime today = now.Date;
+            int hour = now.Hour;
 
-            // 判断是否在换班时间窗口内（当前小时为 8 或 20，且今天尚未换班）
-            bool isShiftTime = (now.Hour == 8 || now.Hour == 20);
+            bool isDayShiftStart = (hour == _dayShiftStartHour);
+            bool isNightShiftStart = (hour == _nightShiftStartHour);
 
-            if (isShiftTime && _lastShiftDate != today)
-            {
-                _lastShiftDate = today;
-                if (this.InvokeRequired)
-                    this.BeginInvoke(new Action(DoShiftChange));
-                else
-                    DoShiftChange();
-            }
+            if (!isDayShiftStart && !isNightShiftStart) return;
+
+            // 防止同一班次重复触发（30分钟内只触发一次）
+            if ((now - _lastShiftChangeTime).TotalMinutes < 30) return;
+
+            _lastShiftChangeTime = now;
+
+            if (this.InvokeRequired)
+                this.BeginInvoke(new Action(DoShiftChange));
+            else
+                DoShiftChange();
         }
 
         private void DoShiftChange()
         {
-            OutPut.Text = _passCount.ToString();
-            _passCount = 0;
-            _failCount = 0;
-            PassCount.Text = "0";
-            FailCount.Text = "0";
+            _lastShiftOutput = _currentShiftOutput;
+            OutPut.Text = _lastShiftOutput.ToString();
+            _currentShiftOutput = 0;
+            uiLabel4.Text = "0";
+            _shiftStartTime = DateTime.Now;
             SaveCounters();
-            AddLogMessage($"换班：本班产出 {OutPut.Text}，计数器已清零。");
+            AddLogMessage($"换班：本班产出 {_lastShiftOutput}，当班产出已清零。");
         }
 
         /// <summary>
-        /// 窗体关闭时释放扫码枪连接及定时器
+        /// 窗体关闭时释放定时器及保存状态
         /// </summary>
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
@@ -228,12 +256,8 @@ namespace WindowsFormsApp
             try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
-            _scanHealthTimer?.Stop();
-            _scanHealthTimer?.Dispose();
             _resultTimer?.Stop();
             _resultTimer?.Dispose();
-            try { scanclient?.Disconnect(); } catch (Exception) { }
-            try { scanclient?.Dispose(); } catch (Exception) { }
         }
 
         // ============================================================
@@ -258,7 +282,9 @@ namespace WindowsFormsApp
 
             SFC_UITextBox.Text = "";
             SFC_UITextBox.Enabled = true;
+            this.ActiveControl = SFC_UITextBox;
             SFC_UITextBox.Focus();
+            SFC_UITextBox.Select();
 
             uiTextBox1.Text = "";
             uiTextBox1.Enabled = false;
@@ -285,7 +311,9 @@ namespace WindowsFormsApp
 
             uiTextBox1.Text = "";
             uiTextBox1.Enabled = true;              // 启用纸码输入
+            this.ActiveControl = uiTextBox1;
             uiTextBox1.Focus();
+            uiTextBox1.Select();
 
             uiLabel2.Text = "请扫描纸码";
             uiLabel2.BackColor = Color.DodgerBlue;
@@ -308,9 +336,9 @@ namespace WindowsFormsApp
             uiLabel2.ForeColor = Color.White;
             try { _passSound?.Play(); } catch { }
 
-            _passCount++;
+            _currentShiftOutput++;
+            uiLabel4.Text = _currentShiftOutput.ToString();
             SaveCounters();
-            PassCount.Text = _passCount.ToString();
 
             ClearRecoveryState();
             _resultTimer.Start();
@@ -341,34 +369,6 @@ namespace WindowsFormsApp
         // ============================================================
         // 双码绑定 — 业务流程
         // ============================================================
-
-        /// <summary>
-        /// 扫码枪数据接收回调（TCP 子线程）：
-        /// 根据当前状态路由到镭雕码或纸码处理
-        /// </summary>
-        private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
-        {
-            _lastScanDataTime = DateTime.Now;  // 记录最后收数据时间
-            string code = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
-            if (string.IsNullOrEmpty(code)) return;
-
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    if (_state == BindState.Waiting)
-                    {
-                        SFC_UITextBox.Text = code;
-                        Task.Run(() => HandleLaserCode(code));
-                    }
-                    else if (_state == BindState.Processing)
-                    {
-                        uiTextBox1.Text = code;
-                        Task.Run(() => HandlePaperCode(code));
-                    }
-                }));
-            }
-        }
 
         /// <summary>
         /// 处理镭雕二维码扫描：
@@ -595,8 +595,10 @@ namespace WindowsFormsApp
                 this.uiRichTextBox1.Text = string.Empty;
 
             string fe = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "]: ";
+            this.uiRichTextBox1.SelectionStart = this.uiRichTextBox1.TextLength;
             this.uiRichTextBox1.SelectionColor = useColor;
             this.uiRichTextBox1.AppendText(fe + message + "\r\n");
+            this.uiRichTextBox1.SelectionStart = this.uiRichTextBox1.TextLength;
             this.uiRichTextBox1.ScrollToCaret();
             WriteLogs.WriteLog(message);
         }
@@ -718,201 +720,82 @@ namespace WindowsFormsApp
         }
 
         // ============================================================
-        // 扫码枪 TCP 连接管理
+        // USB 扫码枪回车事件（键盘模式）
         // ============================================================
 
-        /// <summary>从配置读取扫码枪 IP/端口并建立连接</summary>
-        private void ConnectToScanner()
+        /// <summary>镭雕二维码输入框回车事件：扫码枪输入后触发绑定流程</summary>
+        private void SFC_UITextBox_KeyDown(object sender, KeyEventArgs e)
         {
-            _scanIp = g_DicMESConfig["Setting"]["scanip"];
-            int.TryParse(g_DicMESConfig["Setting"]["scanport"], out _scanPort);
-            Connect_Scan(uiLabel7);
-        }
-
-        /// <summary>创建 SimpleTcpClient 连接扫码枪，注册 DataReceived 回调，更新状态标签</summary>
-        private void Connect_Scan(UILabel uiLabel)
-        {
-            scanclient?.Disconnect();
-            scanclient = new SimpleTcpClient
+            if (e.KeyCode == Keys.Enter && _state == BindState.Waiting)
             {
-                StringEncoder = Encoding.UTF8,
-                Delimiter = Encoding.UTF8.GetBytes("\r")[0]
-            };
-            SetSocketTimeout(scanclient);
-            scanclient.DataReceived += scanclient_DataReceived;
-            try
-            {
-                scanclient.Connect(_scanIp, _scanPort);
-                _scanConnected = true;
-                uiLabel.Text = "已连接";
-                uiLabel.BackColor = Color.DodgerBlue;
-                AddLogMessage("扫码枪连接成功", Color.Green);
-                _lastScanDataTime = DateTime.Now;   // 重置收数据时间，避免首次检测误判
-                _scanFailCount = 0;
-                // 扫码枪连接成功 → 进入等待状态
-                EnterWaitingState();
-            }
-            catch
-            {
-                _scanConnected = false;
-                uiLabel.Text = "未连接";
-                uiLabel.BackColor = Color.Red;
-                AddLogMessage("扫码枪连接失败", Color.Red);
+                e.SuppressKeyPress = true;
+                string code = SFC_UITextBox.Text.Trim();
+                if (!string.IsNullOrEmpty(code))
+                    Task.Run(() => HandleLaserCode(code));
             }
         }
 
-        /// <summary>启动扫码枪健康检查定时器：每 10 秒检测一次，断线自动重连</summary>
-        private void StartScanHealthCheck()
+        /// <summary>纸码输入框回车事件：扫码枪输入后触发绑定流程</summary>
+        private void uiTextBox1_KeyDown(object sender, KeyEventArgs e)
         {
-            _scanHealthTimer = new System.Timers.Timer(10000);
-            _scanHealthTimer.Elapsed += (s, ev) =>
+            if (e.KeyCode == Keys.Enter && _state == BindState.Processing)
             {
-                if (_scanReconnecting) return;
-
-                bool alive = IsScannerAlive();
-                if (alive)
-                {
-                    _scanFailCount = 0;  // 恢复则清零
-                }
-
-                if (_scanConnected && !alive)
-                {
-                    _scanFailCount++;
-                    // 需连续 2 次失败才认定为断开（避免 Poll 假阳性）
-                    if (_scanFailCount >= 2)
-                    {
-                        BeginInvoke(new Action(() =>
-                        {
-                            AddLogMessage("检测到扫码枪已断开", Color.Red);
-                            SetScanStatus(false);
-                        }));
-                        _scanFailCount = 0;
-                    }
-                }
-                else if (!_scanConnected && alive)
-                {
-                    _scanFailCount = 0;
-                    BeginInvoke(new Action(() => AddLogMessage("检测到扫码枪端口可达，开始重连")));
-                    _ = ReconnectScanner();
-                }
-            };
-            _scanHealthTimer.Start();
-        }
-
-        /// <summary>判断扫码枪连接是否存活</summary>
-        private bool IsScannerAlive()
-        {
-            try
-            {
-                if (scanclient == null) return false;
-                // 最近 10 秒内收到过数据 → 必然存活，跳过 socket 检测
-                if ((DateTime.Now - _lastScanDataTime).TotalSeconds < 10)
-                    return true;
-
-                var tcp = GetUnderlyingTcpClient(scanclient);
-                if (tcp == null || tcp.Client == null) return false;
-                // Poll(1000us) 给 1ms 让底层有时间响应
-                bool disconnected = tcp.Client.Poll(1000, SelectMode.SelectRead) && tcp.Client.Available == 0;
-                return !disconnected;
+                e.SuppressKeyPress = true;
+                string code = uiTextBox1.Text.Trim();
+                if (!string.IsNullOrEmpty(code))
+                    Task.Run(() => HandlePaperCode(code));
             }
-            catch (Exception) { return false; }
         }
 
-        /// <summary>用反射获取 SimpleTcpClient 内部的 TcpClient</summary>
-        private System.Net.Sockets.TcpClient GetUnderlyingTcpClient(SimpleTcpClient client)
-        {
-            try
-            {
-                var t = client.GetType();
-                var prop = t.GetProperty("Client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("_client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("tcpClient",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (prop != null && prop.GetValue(client) is System.Net.Sockets.TcpClient tcp)
-                    return tcp;
-            }
-            catch (Exception) { }
-            return null;
-        }
+        // ============================================================
+        // 班次管理
+        // ============================================================
 
-        /// <summary>扫码枪重连：断开旧连接 → 新建客户端 → 最多 5 次尝试，每次间隔 3 秒</summary>
-        private async Task ReconnectScanner()
+        /// <summary>
+        /// 启动时根据当前时间确定所属班次，初始化班次开始时间
+        /// </summary>
+        private void InitializeShiftState()
         {
-            _scanReconnecting = true;
-            var token = _cts?.Token ?? CancellationToken.None;
+            DateTime now = DateTime.Now;
 
-            for (int i = 1; i <= 5; i++)
+            // 如果从 counters.json 恢复的班次开始时间仍在当前班次内，保留它
+            if (_shiftStartTime != DateTime.MinValue)
             {
-                if (token.IsCancellationRequested) break;
-                try
-                {
-                    await Task.Run(() =>
-                    {
-                        try { scanclient?.Disconnect(); } catch (Exception) { }
-                        try { scanclient?.Dispose(); } catch (Exception) { }
-                        scanclient = new SimpleTcpClient
-                        {
-                            StringEncoder = Encoding.UTF8,
-                            Delimiter = Encoding.UTF8.GetBytes("\r")[0]
-                        };
-                        SetSocketTimeout(scanclient);
-                        scanclient.DataReceived += scanclient_DataReceived;
-                        scanclient.Connect(_scanIp, _scanPort);
-                    }, token);
-                    _scanReconnecting = false;
-                    AddLogMessage($"扫码枪重连成功（第{i}次尝试）", Color.Green);
-                    _lastScanDataTime = DateTime.Now;
-                    _scanFailCount = 0;
-                    SetScanStatus(true);
-                    // 重连成功 → 进入等待状态
-                    BeginInvoke(new Action(() => EnterWaitingState()));
+                DateTime currentShiftStart = GetCurrentShiftStart(now);
+                if (_shiftStartTime == currentShiftStart)
                     return;
-                }
-                catch (Exception) { }
-                if (i < 5)
-                {
-                    try { await Task.Delay(3000, token); }
-                    catch (TaskCanceledException) { break; }
-                }
+                // 班次已过，使用旧数据作为上班产出
+                _lastShiftOutput = _currentShiftOutput;
+                OutPut.Text = _lastShiftOutput.ToString();
+                _currentShiftOutput = 0;
             }
 
-            _scanReconnecting = false;
-            AddLogMessage("扫码枪重连失败，已尝试5次", Color.Red);
-            SetScanStatus(false);
-        }
-
-        /// <summary>更新扫码枪状态标签（线程安全）</summary>
-        private void SetScanStatus(bool connected)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => SetScanStatus(connected)));
-                return;
-            }
-            _scanConnected = connected;
-            uiLabel7.Text = connected ? "已连接" : "未连接";
-            uiLabel7.BackColor = connected ? Color.DodgerBlue : Color.Red;
+            _shiftStartTime = GetCurrentShiftStart(now);
+            SaveCounters();
         }
 
         /// <summary>
-        /// 设置 SimpleTcpClient 内部 TcpClient 的 SendTimeout / ReceiveTimeout
+        /// 根据当前时间计算所属班次的开始时间
+        /// 白班：dayShiftStart:00 ~ nightShiftStart:00
+        /// 夜班：nightShiftStart:00 ~ 次日 dayShiftStart:00
         /// </summary>
-        private void SetSocketTimeout(SimpleTcpClient client, int timeoutMs = 2000)
+        private DateTime GetCurrentShiftStart(DateTime now)
         {
-            try
+            if (now.Hour >= _dayShiftStartHour && now.Hour < _nightShiftStartHour)
             {
-                var tcp = GetUnderlyingTcpClient(client);
-                if (tcp != null)
-                {
-                    tcp.SendTimeout = timeoutMs;
-                    tcp.ReceiveTimeout = timeoutMs;
-                }
+                // 白班
+                return now.Date.AddHours(_dayShiftStartHour);
             }
-            catch (Exception) { }
+            else if (now.Hour >= _nightShiftStartHour)
+            {
+                // 夜班（当天开始）
+                return now.Date.AddHours(_nightShiftStartHour);
+            }
+            else
+            {
+                // 夜班（前一天 20:00 开始，跨到次日凌晨）
+                return now.Date.AddDays(-1).AddHours(_nightShiftStartHour);
+            }
         }
     }
 }

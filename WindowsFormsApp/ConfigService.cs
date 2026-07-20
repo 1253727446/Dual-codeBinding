@@ -45,6 +45,8 @@ namespace WindowsFormsApp
 
             TryReadValue("SCAN", "IP", "scanip", dic);
             TryReadValue("SCAN", "port", "scanport", dic);
+            TryReadValue("SHIFT", "dayShiftStart", "dayShiftStart", dic);
+            TryReadValue("SHIFT", "nightShiftStart", "nightShiftStart", dic);
 
             return dic;
         }
