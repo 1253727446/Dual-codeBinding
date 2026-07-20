@@ -13,7 +13,6 @@ namespace WindowsFormsApp
             config["Config"] = ReadMesConfig();
             config["Setting"] = ReadSetting();
             config["SOFTWARE"] = ReadSoftware();
-            config["CCD"] = ReadCcd();
             return config;
         }
 
@@ -26,12 +25,14 @@ namespace WindowsFormsApp
             TryReadValue("Config", "LoginID", "LoginID", dic);
             TryReadValue("Config", "ClientID", "ClientID", dic);
             TryReadValue("Config", "PROJECT_ID", "PROJECT_ID", dic);
+            TryReadValue("Config", "PROJECT", "PROJECT", dic);
             TryReadValue("Config", "PRODUCT_ID", "PRODUCT_ID", dic);
             TryReadValue("Config", "StationID", "StationID", dic);
             TryReadValue("Config", "Line", "Line", dic);
             TryReadValue("Config", "Operation", "Operation", dic);
-            TryReadValue("Config", "SapShoporder", "SapShoporder", dic);
             TryReadValue("Config", "Remark", "Remark", dic);
+            TryReadValue("Config", "Resource", "Resource", dic);
+            TryReadValue("Config", "remark1", "remark1", dic);
             TryReadValue("Config", "SchedulingID", "SchedulingID", dic);
 
             return dic;
@@ -44,31 +45,14 @@ namespace WindowsFormsApp
 
             TryReadValue("SCAN", "IP", "scanip", dic);
             TryReadValue("SCAN", "port", "scanport", dic);
-            TryReadValue("PARAM", "ccdDataName", "ccdDataName", dic);
-
-            return dic;
-        }
-
-        private Dictionary<string, string> ReadCcd()
-        {
-            var dic = new Dictionary<string, string>();
-            iniRead.IniFile(@"\cfg\setting.ini");
-
-            TryReadValue("CCD", "IP", "ip", dic);
-            TryReadValue("CCD", "port", "port", dic);
 
             return dic;
         }
 
         private Dictionary<string, string> ReadSoftware()
         {
-            var dic = new Dictionary<string, string>();
-            iniRead.IniFile(@"\cfg\setting.ini");
-
-            TryReadValue("SOFTWARE", "addSfcKeyDataName", "addSfcKeyDataName", dic);
-            TryReadValue("SOFTWARE", "logStation", "logStation", dic);
-
-            return dic;
+            // 预留：暂无 SOFTWARE 配置项
+            return new Dictionary<string, string>();
         }
 
         private void TryReadValue(string section, string key, string dictKey, Dictionary<string, string> dic)

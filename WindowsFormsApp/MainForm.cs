@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SimpleTCP;
 using Sunny.UI;
@@ -6,9 +6,9 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
-using System.Linq;
 using System.Media;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -27,12 +27,6 @@ namespace WindowsFormsApp
         private string _mesUrl;
         private string _loginId;
         private string _clientId;
-        /// <summary>本地工站名（用于 SFC Log 过滤和校验）</summary>
-        private string _logStation;
-        /// <summary>第一条符合规则的 SFC Log 的 logStation（用于 ChangeSfcStation）</summary>
-        private string _firstLogStation;
-        /// <summary>SFC Log 校验是否通过（通过才调 ChangeSfcStation）</summary>
-        private bool _sfcLogPassed;
 
         // ========== 过站计数器 ==========
         /// <summary>当班过站成功计数</summary>
@@ -48,7 +42,7 @@ namespace WindowsFormsApp
         /// <summary>过站失败音效</summary>
         private SoundPlayer _failSound;
 
-        // ========== 扫码枪 / CCD 连接 ==========
+        // ========== 扫码枪连接 ==========
         /// <summary>扫码枪 TCP 客户端</summary>
         private SimpleTcpClient scanclient;
         /// <summary>扫码枪是否已连接</summary>
@@ -60,25 +54,26 @@ namespace WindowsFormsApp
         private int _scanPort;
         /// <summary>扫码枪健康检查定时器</summary>
         private System.Timers.Timer _scanHealthTimer;
-        /// <summary>CCD TCP 客户端</summary>
-        private SimpleTcpClient _ccdClient;
-        /// <summary>CCD 是否已连接</summary>
-        private bool _ccdConnected;
-        /// <summary>CCD 是否正在重连中</summary>
-        private bool _ccdReconnecting;
-        /// <summary>CCD IP / 端口（缓存）</summary>
-        private string _ccdIp;
-        private int _ccdPort;
-        /// <summary>CCD 健康检查定时器</summary>
-        private System.Windows.Forms.Timer _ccdHealthTimer;
-        /// <summary>CCD 是否在等待结果</summary>
-        private volatile bool _ccdArmed;
-        /// <summary>当前等待 CCD 结果的 SFC</summary>
-        private string _ccdPendingSfc;
         /// <summary>后台任务取消令牌</summary>
         private CancellationTokenSource _cts;
 
-        /// <summary></summary>
+        // ========== 双码绑定状态管理 ==========
+        private enum BindState { Waiting, Processing }
+        private BindState _state = BindState.Waiting;
+        /// <summary>当前已扫描的镭雕二维码</summary>
+        private string _currentLaserCode;
+        /// <summary>GetCustomData 返回的规则缓存</summary>
+        private List<GetCustomDataItem> _customData;
+        /// <summary>镭雕二维码正则规则（SFCRule）</summary>
+        private string _sfcRule;
+        /// <summary>纸码正则规则（SubSFCRule）</summary>
+        private string _subSfcRule;
+        /// <summary>PASS/FAIL 结果展示 2 秒后自动清除</summary>
+        private System.Windows.Forms.Timer _resultTimer;
+        /// <summary>绑定流程中断恢复文件路径</summary>
+        private readonly string _statePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "state.json");
+
+        /// <summary>
         /// 构造函数：初始化组件、加载全部配置
         /// </summary>
         public MainForm()
@@ -88,6 +83,13 @@ namespace WindowsFormsApp
             _cts = new CancellationTokenSource();
             _passSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Pass.wav"));
             _failSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "alert.wav"));
+
+            // 结果展示定时器：PASS/FAIL 显示 2 秒后自动回到等待状态
+            _resultTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            _resultTimer.Tick += (s, e) => { _resultTimer.Stop(); EnterWaitingState(); };
+
+            // 注册重置按钮
+            uiButton1.Click += uiButton1_Click;
         }
 
         /// <summary>
@@ -99,10 +101,9 @@ namespace WindowsFormsApp
             InitSettings();              // 读取设备、工站等本地配置
             LoadCounters();              // 从 counters.json 恢复过站计数器
             ConnectToScanner();          // 连接扫码枪 TCP
-            ConnectToCcd();              // 连接 CCD TCP（始终启用）
             StartScanHealthCheck();      // 启动扫码枪健康检查/自动重连
-            StartCcdHealthCheck();       // 启动 CCD 健康检查/自动重连
             StartShiftTimer();           // 启动换班检查定时器（8:00 / 20:00）
+            CheckRecoveryState();        // 检查是否有未完成的绑定流程需要恢复
             this.FormClosing += MainForm_FormClosing;  // 注册关闭事件释放资源
         }
 
@@ -117,19 +118,20 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 读取设备连接和工站配置
+        /// 读取设备连接配置，并填充顶部信息栏标签
         /// </summary>
         private void InitSettings()
         {
-            // SFC Log 校验用的本地工站名
-            _logStation = g_DicMESConfig["SOFTWARE"].ContainsKey("logStation")
-                ? g_DicMESConfig["SOFTWARE"]["logStation"] : "";
             // 扫码枪配置
             _scanIp = g_DicMESConfig["Setting"]["scanip"];
             int.TryParse(g_DicMESConfig["Setting"]["scanport"], out _scanPort);
-            // CCD 配置
-            _ccdIp = g_DicMESConfig["CCD"]["ip"];
-            int.TryParse(g_DicMESConfig["CCD"]["port"], out _ccdPort);
+
+            // 顶部信息栏：静态标签保持设计器默认值，动态值标签填入配置
+            var cfg = g_DicMESConfig["Config"];
+            uiLabel9.Text = cfg.ContainsKey("PROJECT") ? cfg["PROJECT"] : "";            // 项目
+            uiLabel11.Text = cfg.ContainsKey("Line") ? cfg["Line"] : "";                 // 线体
+            uiLabel13.Text = cfg.ContainsKey("Resource") ? cfg["Resource"] : "";         // 工单
+            uiLabel15.Text = cfg.ContainsKey("Operation") ? cfg["Operation"] : "";       // 工站
         }
 
         /// <summary>
@@ -163,45 +165,6 @@ namespace WindowsFormsApp
                 File.WriteAllText(_countersPath, JsonConvert.SerializeObject(data));
             }
             catch (Exception) { }
-        }
-
-        /// <summary>
-        /// 过站失败计数递增并落盘，提取重复逻辑
-        /// </summary>
-        private void MarkFail()
-        {
-            _failCount++;
-            SaveCounters();
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    FailCount.Text = _failCount.ToString();
-                    uiLabel2.Text = "FAIL";
-                    uiLabel2.BackColor = Color.Red;
-                    try { _failSound?.Play(); } catch { }
-                }));
-                return;
-            }
-            FailCount.Text = _failCount.ToString();
-            uiLabel2.Text = "FAIL";
-            uiLabel2.BackColor = Color.Red;
-            try { _failSound?.Play(); } catch { }
-        }
-
-        /// <summary>
-        /// 设置过站结果标签为 PASS（绿色背景白色字体）
-        /// </summary>
-        private void SetPassLabel()
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(SetPassLabel));
-                return;
-            }
-            uiLabel2.Text = "PASS";
-            uiLabel2.BackColor = Color.Green;
-            try { _passSound?.Play(); } catch { }
         }
 
         /// <summary>
@@ -248,65 +211,328 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 窗体关闭时释放扫码枪和 CCD 连接及定时器
+        /// 窗体关闭时释放扫码枪连接及定时器
         /// </summary>
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            // 如果在加工中，保存恢复状态
+            if (_state == BindState.Processing && !string.IsNullOrEmpty(_currentLaserCode))
+                SaveRecoveryState();
+
             try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
             try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
             _scanHealthTimer?.Stop();
             _scanHealthTimer?.Dispose();
-            _ccdHealthTimer?.Stop();
-            _ccdHealthTimer?.Dispose();
+            _resultTimer?.Stop();
+            _resultTimer?.Dispose();
             try { scanclient?.Disconnect(); } catch (Exception) { }
             try { scanclient?.Dispose(); } catch (Exception) { }
-            try { _ccdClient?.Disconnect(); } catch (Exception) { }
-            try { _ccdClient?.Dispose(); } catch (Exception) { }
         }
 
         // ============================================================
-        // 扫码过站页
+        // 双码绑定 — 状态管理
+        // ============================================================
+
+        /// <summary>进入《等待》状态：清空输入、镭雕码获得焦点、纸码置灰</summary>
+        private void EnterWaitingState()
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(EnterWaitingState));
+                return;
+            }
+
+            _state = BindState.Waiting;
+            _currentLaserCode = null;
+            _customData = null;
+            _sfcRule = null;
+            _subSfcRule = null;
+            _resultTimer.Stop();
+
+            SFC_UITextBox.Text = "";
+            SFC_UITextBox.Enabled = true;
+            SFC_UITextBox.Focus();
+
+            uiTextBox1.Text = "";
+            uiTextBox1.Enabled = false;
+
+            uiLabel2.Text = "等待中";
+            uiLabel2.BackColor = Color.DodgerBlue;
+            uiLabel2.ForeColor = Color.White;
+
+            ClearRecoveryState();
+        }
+
+        /// <summary>进入《加工中》状态：锁定镭雕码、纸码获得焦点</summary>
+        private void EnterProcessingState()
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(EnterProcessingState));
+                return;
+            }
+
+            _state = BindState.Processing;
+
+            SFC_UITextBox.Enabled = false;          // 锁定镭雕码
+
+            uiTextBox1.Text = "";
+            uiTextBox1.Enabled = true;              // 启用纸码输入
+            uiTextBox1.Focus();
+
+            uiLabel2.Text = "请扫描纸码";
+            uiLabel2.BackColor = Color.DodgerBlue;
+            uiLabel2.ForeColor = Color.White;
+
+            SaveRecoveryState();
+        }
+
+        /// <summary>展示 PASS 结果：绿色背景 + 音效，2 秒后回到等待</summary>
+        private void ShowPass()
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(ShowPass));
+                return;
+            }
+
+            uiLabel2.Text = "PASS  ✓";
+            uiLabel2.BackColor = Color.Green;
+            uiLabel2.ForeColor = Color.White;
+            try { _passSound?.Play(); } catch { }
+
+            _passCount++;
+            SaveCounters();
+            PassCount.Text = _passCount.ToString();
+
+            ClearRecoveryState();
+            _resultTimer.Start();
+        }
+
+        /// <summary>展示 FAIL 结果：红色背景 + 错误信息 + 音效，2 秒后回到等待</summary>
+        private void ShowFail(string message)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => ShowFail(message)));
+                return;
+            }
+
+            uiLabel2.Text = "FAIL  ✗";
+            uiLabel2.BackColor = Color.Red;
+            uiLabel2.ForeColor = Color.White;
+            try { _failSound?.Play(); } catch { }
+
+            _failCount++;
+            SaveCounters();
+            FailCount.Text = _failCount.ToString();
+
+            AddLogMessage(message, Color.Red);
+            _resultTimer.Start();
+        }
+
+        // ============================================================
+        // 双码绑定 — 业务流程
         // ============================================================
 
         /// <summary>
-        /// SFC 过站主流程：
-        /// 1. MES Start（产品入站）
-        /// 2. 提交 CCD 等待判定结果
-        /// （Complete / NcComplete 由 CCD 回调异步完成）
-        /// 若 CCD 还在处理上一个条码，拒绝新条码防止覆盖
+        /// 扫码枪数据接收回调（TCP 子线程）：
+        /// 根据当前状态路由到镭雕码或纸码处理
         /// </summary>
-        /// <param name="sfcValue">扫描到的 SFC 条码值</param>
-        private bool ruleSFC(string sfcValue)
+        private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
         {
-            sfcValue = sfcValue.Trim();
-            // 清空结果标签
-            BeginInvoke(new Action(() => { uiLabel2.Text = ""; }));
+            string code = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
+            if (string.IsNullOrEmpty(code)) return;
 
-            // 防止覆盖：CCD 还在等待上一个条码的结果
-            if (_ccdArmed)
+            if (this.InvokeRequired)
             {
-                AddLogMessage($"CCD 忙：正在等待 [{_ccdPendingSfc}] 的判定结果，拒绝 [{sfcValue}]", Color.Red);
-                BeginInvoke(new Action(() => SFC_UITextBox.Text = ""));
-                MarkFail();
-                return false;
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (_state == BindState.Waiting)
+                    {
+                        SFC_UITextBox.Text = code;
+                        Task.Run(() => HandleLaserCode(code));
+                    }
+                    else if (_state == BindState.Processing)
+                    {
+                        uiTextBox1.Text = code;
+                        Task.Run(() => HandlePaperCode(code));
+                    }
+                }));
             }
+        }
 
-            // 第一步：MES Start（产品入站）
-            if (!Start(sfcValue))
+        /// <summary>
+        /// 处理镭雕二维码扫描：
+        /// GetCustomData 获取规则 → SFCRule 正则校验 → Start 入站 → 进入加工中
+        /// </summary>
+        private void HandleLaserCode(string laserCode)
+        {
+            try
             {
-                AddLogMessage("Start失败", Color.Red);
-                MarkFail();
-                return false;
-            }
-            AddLogMessage("start成功", Color.Green);
+                // 1. 获取自定义数据（规则）
+                string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
+                bool dataOk = FormHelper.GetCustomData(
+                    _mesUrl, _loginId, _clientId, productId,
+                    out List<GetCustomDataItem> dataList, out string dataMsg);
 
-            // 第二步：提交 CCD 等待判定结果
-            _ccdPendingSfc = sfcValue;
-            _ccdArmed = true;
-            AddLogMessage($"等待CCD判定结果（SFC={sfcValue}）", Color.Blue);
-            return true;
+                if (!dataOk || dataList == null || dataList.Count == 0)
+                {
+                    AddLogMessage($"GetCustomData失败：{dataMsg}", Color.Red);
+                    ShowFail(dataMsg);
+                    return;
+                }
+
+                _customData = dataList;
+
+                // 提取规则
+                _sfcRule = null;
+                _subSfcRule = null;
+                foreach (var item in dataList)
+                {
+                    if (item.NAME == "SFCRule") _sfcRule = item.VALUE;
+                    else if (item.NAME == "SubSFCRule") _subSfcRule = item.VALUE;
+                }
+
+                if (string.IsNullOrEmpty(_sfcRule))
+                {
+                    ShowFail("未配置SFCRule规则");
+                    return;
+                }
+                AddLogMessage($"SFCRule=[{_sfcRule}]", Color.Blue);
+
+                // 2. 镭雕码格式校验
+                try
+                {
+                    if (!Regex.IsMatch(laserCode, _sfcRule))
+                    {
+                        ShowFail("镭雕码格式错误，请重新输入");
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ShowFail("SFCRule正则解析异常：" + ex.Message);
+                    return;
+                }
+                AddLogMessage("镭雕码格式校验通过", Color.Green);
+
+                // 3. MES Start 入站
+                _currentLaserCode = laserCode;
+                if (!CallStart(laserCode))
+                {
+                    _currentLaserCode = null;
+                    ShowFail("Start失败");
+                    return;
+                }
+                AddLogMessage("Start成功", Color.Green);
+
+                // 4. 进入加工中状态
+                BeginInvoke(new Action(() => EnterProcessingState()));
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage("镭雕码处理异常：" + ex.Message, Color.Red);
+                ShowFail(ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 处理纸码扫描：
+        /// SubSFCRule 正则校验 → GetSerializeData 查重 → Serializable 绑定 → Complete 出站
+        /// </summary>
+        private void HandlePaperCode(string paperCode)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_subSfcRule))
+                {
+                    ShowFail("未配置SubSFCRule规则");
+                    return;
+                }
+
+                // 1. 纸码格式校验
+                try
+                {
+                    if (!Regex.IsMatch(paperCode, _subSfcRule))
+                    {
+                        ShowFail("纸码格式错误，请重新输入");
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ShowFail("SubSFCRule正则解析异常：" + ex.Message);
+                    return;
+                }
+                AddLogMessage("纸码格式校验通过", Color.Green);
+
+                // 2. GetSerializeData 查重
+                bool chkOk = FormHelper.GetSerializeData(
+                    _mesUrl, _loginId, _clientId, paperCode,
+                    out bool isUsed, out string chkMsg);
+
+                if (!chkOk)
+                {
+                    ShowFail(chkMsg);
+                    return;
+                }
+
+                if (isUsed)
+                {
+                    ShowFail("该纸码已经使用，请重新输入新纸码");
+                    return;
+                }
+                AddLogMessage("纸码未使用，可以绑定", Color.Green);
+
+                // 3. Serializable 绑定
+                string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
+                string stationId = g_DicMESConfig["Config"]["StationID"];
+
+                bool bindOk = FormHelper.Serializable(
+                    _mesUrl, _loginId, _clientId,
+                    paperCode,
+                    schedulingId,
+                    "1",                       // BOARD_COUNT
+                    stationId,
+                    new List<string> { _currentLaserCode },  // NEW_SFC_LIST
+                    "C",                       // SFC_STATE
+                    out string bindMsg);
+
+                if (!bindOk)
+                {
+                    ShowFail(bindMsg);
+                    return;
+                }
+                AddLogMessage("绑定成功", Color.Green);
+
+                // 4. Complete 出站
+                string remark = g_DicMESConfig["Config"].ContainsKey("remark1")
+                    ? g_DicMESConfig["Config"]["remark1"] : "";
+                string time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                bool cplOk = FormHelper.Complete(
+                    _mesUrl, _loginId, _clientId, paperCode,
+                    stationId, schedulingId, remark, time,
+                    out string cplMsg);
+
+                if (cplOk)
+                {
+                    AddLogMessage("Complete成功", Color.Green);
+                    BeginInvoke(new Action(() => ShowPass()));
+                }
+                else
+                {
+                    ShowFail(cplMsg);
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage("纸码处理异常：" + ex.Message, Color.Red);
+                ShowFail(ex.Message);
+            }
         }
 
         // ============================================================
@@ -316,20 +542,18 @@ namespace WindowsFormsApp
         /// <summary>
         /// 调用 MES Start 接口，产品入站
         /// </summary>
-        /// <param name="SFC">条码值</param>
-        /// <returns>成功返回 true</returns>
-        private bool Start(string SFC)
+        private bool CallStart(string SFC)
         {
             try
             {
                 string StationName = g_DicMESConfig["Config"]["Operation"];
                 string Line = g_DicMESConfig["Config"]["Line"];
-                string ShopOrder = g_DicMESConfig["Config"]["SapShoporder"];
+                string ShopOrder = g_DicMESConfig["Config"]["Resource"];
                 string SchingID = g_DicMESConfig["Config"]["SchedulingID"];
 
                 bool flag = FormHelper.Start(_mesUrl, _loginId, _clientId, SFC, StationName, Line, ShopOrder, SchingID, out string msg);
                 if (!flag)
-                    AddLogMessage(msg, Color.Red);
+                    AddLogMessage("Start失败：" + msg, Color.Red);
                 return flag;
             }
             catch (Exception ex)
@@ -369,81 +593,119 @@ namespace WindowsFormsApp
         }
 
         // ============================================================
-        // SFC Log 校验
+        // 中断恢复
         // ============================================================
 
-        /// <summary>
-        /// 扫码后调用 GetSfcLogListByParam 校验条码流向：
-        /// 1. 获取 SFC Log 列表
-        /// 2. 删去 logStation 与本地 logStation 一致的条目
-        /// 3. 取剩余第一条，检查 logAction=="REWORK" 且 remark 包含本地 logStation
-        /// 通过 → 继续过站 / 不通过 → 记录失败
-        /// </summary>
-        private bool ValidateSfcLog(string sfc)
+        /// <summary>启动时检查是否有未完成的绑定流程</summary>
+        private void CheckRecoveryState()
         {
-            if (string.IsNullOrEmpty(_logStation))
+            try
             {
-                AddLogMessage("SFC Log校验跳过：未配置 logStation", Color.Orange);
-                return true; // 未配置则跳过校验
-            }
-
-            bool ok = FormHelper.GetSfcLogListByParam(
-                _mesUrl, _loginId, _clientId, sfc,
-                out JArray dataList, out string apiMsg);
-
-            if (!ok || dataList == null || dataList.Count == 0)
-            {
-                AddLogMessage($"SFC Log校验失败：GetSfcLogListByParam 无数据 — {apiMsg}", Color.Red);
-                BeginInvoke(new Action(() => MarkFail()));
-                return false;
-            }
-
-            // 过滤：删去 logStation 与本地一致的条目
-            var filtered = new List<JToken>();
-            foreach (var item in dataList)
-            {
-                string itemStation = item["SFC_LOG"]?["logStation"]?.ToString() ?? "";
-                if (!string.Equals(itemStation.Trim(), _logStation.Trim(), StringComparison.OrdinalIgnoreCase))
+                if (!File.Exists(_statePath))
                 {
-                    filtered.Add(item);
+                    EnterWaitingState();
+                    return;
+                }
+
+                string json = File.ReadAllText(_statePath);
+                var data = JsonConvert.DeserializeObject<dynamic>(json);
+                string savedState = data.state?.ToString() ?? "";
+                string savedLaserCode = data.laserCode?.ToString() ?? "";
+
+                if (savedState == "Processing" && !string.IsNullOrEmpty(savedLaserCode))
+                {
+                    var result = MessageBox.Show(
+                        $"检测到上次未完成的绑定流程\n镭雕码：{savedLaserCode}\n\n是否继续绑定纸码？",
+                        "恢复流程",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+
+                    if (result == DialogResult.Yes)
+                    {
+                        _currentLaserCode = savedLaserCode;
+                        SFC_UITextBox.Text = savedLaserCode;
+
+                        // 重新获取规则并进入加工中
+                        Task.Run(() =>
+                        {
+                            string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
+                            bool ok = FormHelper.GetCustomData(
+                                _mesUrl, _loginId, _clientId, productId,
+                                out List<GetCustomDataItem> dataList, out string _);
+
+                            if (ok && dataList != null)
+                            {
+                                _customData = dataList;
+                                foreach (var item in dataList)
+                                {
+                                    if (item.NAME == "SFCRule") _sfcRule = item.VALUE;
+                                    else if (item.NAME == "SubSFCRule") _subSfcRule = item.VALUE;
+                                }
+                                BeginInvoke(new Action(() => EnterProcessingState()));
+                            }
+                            else
+                            {
+                                AddLogMessage("恢复失败：无法获取规则", Color.Red);
+                                BeginInvoke(new Action(() => EnterWaitingState()));
+                            }
+                        });
+                    }
+                    else
+                    {
+                        EnterWaitingState();
+                    }
+                }
+                else
+                {
+                    EnterWaitingState();
                 }
             }
-
-            if (filtered.Count == 0)
+            catch (Exception ex)
             {
-                AddLogMessage($"SFC Log校验失败：过滤后无剩余条目（所有 logStation 均为 [{_logStation}]）", Color.Red);
-                BeginInvoke(new Action(() => MarkFail()));
-                return false;
+                AddLogMessage("恢复检测异常：" + ex.Message, Color.Red);
+                EnterWaitingState();
             }
+        }
 
-            AddLogMessage($"SFC Log：原始 {dataList.Count} 条，过滤后剩余 {filtered.Count} 条", Color.Blue);
-
-            // 取第一条剩余的
-            var firstLog = filtered[0]["SFC_LOG"];
-            string logAction = firstLog["logAction"]?.ToString() ?? "";
-            string remark = firstLog["remark"]?.ToString() ?? "";
-
-            // 检查：logAction 必须为 REWORK，remark 必须包含本地 logStation
-            bool actionOk = string.Equals(logAction.Trim(), "REWORK", StringComparison.OrdinalIgnoreCase);
-            bool remarkOk = remark.Contains(_logStation);
-
-            // 记录第一条符合规则的 logStation，供 ChangeSfcStation 使用
-            _firstLogStation = firstLog["logStation"]?.ToString() ?? "";
-
-            if (actionOk && remarkOk)
+        /// <summary>保存恢复状态到文件</summary>
+        private void SaveRecoveryState()
+        {
+            try
             {
-                _sfcLogPassed = true;
-                AddLogMessage($"SFC Log校验通过：logAction=REWORK, remark 包含 [{_logStation}]", Color.Green);
+                var data = new { state = "Processing", laserCode = _currentLaserCode ?? "" };
+                File.WriteAllText(_statePath, JsonConvert.SerializeObject(data));
             }
-            else
+            catch (Exception) { }
+        }
+
+        /// <summary>清除恢复状态文件</summary>
+        private void ClearRecoveryState()
+        {
+            try
             {
-                _sfcLogPassed = false;
-                string failReason = "";
-                if (!actionOk) failReason += $"logAction=[{logAction}]（期望REWORK）";
-                if (!remarkOk) failReason += (failReason.Length > 0 ? "；" : "") + $"remark 不包含 [{_logStation}]";
-                AddLogMessage($"SFC Log校验未通过：{failReason}（跳过ChangeSfcStation）", Color.Orange);
+                if (File.Exists(_statePath))
+                    File.Delete(_statePath);
             }
-            return true; // 无论是否符合，都继续后续流程
+            catch (Exception) { }
+        }
+
+        // ============================================================
+        // 重置按钮
+        // ============================================================
+
+        private void uiButton1_Click(object sender, EventArgs e)
+        {
+            if (_state == BindState.Processing && !string.IsNullOrEmpty(_currentLaserCode))
+            {
+                var result = MessageBox.Show(
+                    "确定要重置当前绑定流程吗？\n已扫描的镭雕码将被清除。",
+                    "确认重置",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+                if (result != DialogResult.Yes) return;
+            }
+            _resultTimer.Stop();
+            EnterWaitingState();
         }
 
         // ============================================================
@@ -476,6 +738,8 @@ namespace WindowsFormsApp
                 uiLabel.Text = "已连接";
                 uiLabel.BackColor = Color.DodgerBlue;
                 AddLogMessage("扫码枪连接成功", Color.Green);
+                // 扫码枪连接成功 → 进入等待状态
+                EnterWaitingState();
             }
             catch
             {
@@ -556,6 +820,8 @@ namespace WindowsFormsApp
                     _scanReconnecting = false;
                     AddLogMessage($"扫码枪重连成功（第{i}次尝试）", Color.Green);
                     SetScanStatus(true);
+                    // 重连成功 → 进入等待状态
+                    BeginInvoke(new Action(() => EnterWaitingState()));
                     return;
                 }
                 catch (Exception) { }
@@ -571,28 +837,6 @@ namespace WindowsFormsApp
             SetScanStatus(false);
         }
 
-        /// <summary>
-        /// 扫码枪数据接收回调（TCP 子线程）：
-        /// 清洗条码 → 回显 SFC 输入框 → SFC Log 校验 → 触发过站流程
-        /// </summary>
-        private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
-        {
-            string sfc = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
-
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    SFC_UITextBox.Text = sfc;
-                    Task.Run(() =>
-                    {
-                        ValidateSfcLog(sfc);
-                        ruleSFC(sfc);
-                    });
-                }));
-            }
-        }
-
         /// <summary>更新扫码枪状态标签（线程安全）</summary>
         private void SetScanStatus(bool connected)
         {
@@ -604,265 +848,6 @@ namespace WindowsFormsApp
             _scanConnected = connected;
             uiLabel7.Text = connected ? "已连接" : "未连接";
             uiLabel7.BackColor = connected ? Color.DodgerBlue : Color.Red;
-        }
-
-        // ============================================================
-        // CCD TCP 连接管理（始终启用，无开关）
-        // ============================================================
-
-        /// <summary>从配置读取 CCD IP/端口并建立连接</summary>
-        private void ConnectToCcd()
-        {
-            _ccdIp = g_DicMESConfig["CCD"]["ip"];
-            int.TryParse(g_DicMESConfig["CCD"]["port"], out _ccdPort);
-            Connect_Ccd(uiLabel4);
-        }
-
-        /// <summary>创建 SimpleTcpClient 连接 CCD 服务端，注册 DataReceived 回调（预留），更新状态标签</summary>
-        private void Connect_Ccd(UILabel uiLabel)
-        {
-            try { _ccdClient?.Disconnect(); } catch (Exception) { }
-            try { _ccdClient?.Dispose(); } catch (Exception) { }
-            _ccdClient = new SimpleTcpClient
-            {
-                StringEncoder = Encoding.UTF8,
-                Delimiter = Encoding.UTF8.GetBytes("\n")[0]
-            };
-            _ccdClient.DataReceived += ccdClient_DataReceived;
-            try
-            {
-                _ccdClient.Connect(_ccdIp, _ccdPort);
-                _ccdConnected = true;
-                uiLabel.Text = "已连接";
-                uiLabel.BackColor = Color.DodgerBlue;
-                AddLogMessage("CCD连接成功", Color.Green);
-            }
-            catch
-            {
-                _ccdConnected = false;
-                uiLabel.Text = "未连接";
-                uiLabel.BackColor = Color.Red;
-                AddLogMessage("CCD连接失败", Color.Red);
-            }
-        }
-
-        /// <summary>启动 CCD 健康检查定时器：每 3 秒探测一次，断线自动重连</summary>
-        private void StartCcdHealthCheck()
-        {
-            _ccdHealthTimer = new System.Windows.Forms.Timer { Interval = 3000 };
-            _ccdHealthTimer.Tick += (s, ev) =>
-            {
-                if (_ccdReconnecting) return;
-
-                bool reachable = ProbeCcd();
-                if (_ccdConnected && !reachable)
-                {
-                    AddLogMessage("检测到CCD已断开", Color.Red);
-                    SetCcdStatus(false);
-                }
-                else if (!_ccdConnected && reachable)
-                {
-                    AddLogMessage("检测到CCD端口可达，开始重连");
-                    _ = ReconnectCcd();
-                }
-            };
-            _ccdHealthTimer.Start();
-        }
-
-        /// <summary>用短超时 TcpClient 探测 CCD 端口是否可达</summary>
-        private bool ProbeCcd()
-        {
-            try
-            {
-                using (var client = new System.Net.Sockets.TcpClient())
-                {
-                    var ar = client.BeginConnect(_ccdIp, _ccdPort, null, null);
-                    if (ar.AsyncWaitHandle.WaitOne(1000))
-                    {
-                        client.EndConnect(ar);
-                        return true;
-                    }
-                }
-            }
-            catch (Exception) { }
-            return false;
-        }
-
-        /// <summary>CCD 重连：断开旧连接 → 新建客户端 → 最多 5 次尝试，每次间隔 3 秒</summary>
-        private async Task ReconnectCcd()
-        {
-            _ccdReconnecting = true;
-            var token = _cts?.Token ?? CancellationToken.None;
-
-            for (int i = 1; i <= 5; i++)
-            {
-                if (token.IsCancellationRequested) break;
-                try
-                {
-                    try { _ccdClient?.Disconnect(); } catch (Exception) { }
-                    try { _ccdClient?.Dispose(); } catch (Exception) { }
-                    _ccdClient = new SimpleTcpClient
-                    {
-                        StringEncoder = Encoding.UTF8,
-                        Delimiter = Encoding.UTF8.GetBytes("\n")[0]
-                    };
-                    _ccdClient.DataReceived += ccdClient_DataReceived;
-                    _ccdClient.Connect(_ccdIp, _ccdPort);
-                    _ccdReconnecting = false;
-                    AddLogMessage($"CCD重连成功（第{i}次尝试）", Color.Green);
-                    SetCcdStatus(true);
-                    return;
-                }
-                catch (Exception) { }
-                if (i < 5)
-                {
-                    try { await Task.Delay(3000, token); }
-                    catch (TaskCanceledException) { break; }
-                }
-            }
-
-            _ccdReconnecting = false;
-            AddLogMessage("CCD重连失败，已尝试5次", Color.Red);
-            SetCcdStatus(false);
-        }
-
-        /// <summary>
-        /// CCD 数据接收回调（TCP 子线程）：
-        /// 解析结果 → OK: AddSfcKey + Complete → NG: AddSfcKey + NcComplete
-        /// </summary>
-        private void ccdClient_DataReceived(object sender, SimpleTCP.Message e)
-        {
-            string raw = e.MessageString
-                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .FirstOrDefault()?.Replace(" ", "") ?? "";
-
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    if (!_ccdArmed)
-                    {
-                        AddLogMessage($"收到CCD数据但未就绪，忽略：{raw}", Color.Gray);
-                        return;
-                    }
-
-                    _ccdArmed = false;
-                    ProcessCcdResult(raw);
-                }));
-            }
-        }
-
-        /// <summary>
-        /// 解析 CCD 结果（格式 OK;... 或 NG;...）
-        /// OK → AddSfcKey + Complete → PASS
-        /// NG → AddSfcKey + NcComplete → FAIL
-        /// </summary>
-        private void ProcessCcdResult(string raw)
-        {
-            string[] parts = raw.Split(';');
-            string judgement = parts.Length > 0 ? parts[0].ToUpper() : "";
-            string sfc = _ccdPendingSfc;
-
-            string dataName = g_DicMESConfig["Setting"].ContainsKey("ccdDataName")
-                ? g_DicMESConfig["Setting"]["ccdDataName"] : "CCD";
-
-            // AddSfcKey 公共参数
-            string stationId = g_DicMESConfig["Config"]["StationID"];
-            string operation = g_DicMESConfig["Config"]["Operation"];
-            string shopOrder = g_DicMESConfig["Config"]["SapShoporder"];
-            string projectId = g_DicMESConfig["Config"]["PROJECT_ID"];
-            string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
-            string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
-
-            // 先上报 CCD 结果到 MES
-            FormHelper.AddSfcKey(
-                _mesUrl, _loginId, _clientId,
-                sfc, stationId, operation, shopOrder,
-                dataName, raw,
-                projectId, productId,
-                out string addSfcMsg);
-            AddLogMessage($"AddSfcKey CCD结果上报：{addSfcMsg}", Color.Blue);
-
-            if (judgement == "OK")
-            {
-                AddLogMessage($"CCD判定 OK：{raw}", Color.Green);
-
-                string remark = g_DicMESConfig["Config"].ContainsKey("Remark")
-                    ? g_DicMESConfig["Config"]["Remark"] : "";
-                bool cplOk = FormHelper.Complete(
-                    _mesUrl, _loginId, _clientId, sfc,
-                    stationId, schedulingId, remark, out string cplMsg);
-
-                if (cplOk)
-                {
-                    AddLogMessage("Complete成功", Color.Green);
-                    _passCount++;
-                    SaveCounters();
-                    SetPassLabel();
-                    PassCount.Text = _passCount.ToString();
-                }
-                else
-                {
-                    AddLogMessage($"Complete失败：{cplMsg}", Color.Red);
-                    MarkFail();
-                }
-            }
-            else // NG 或其他
-            {
-                AddLogMessage($"CCD判定 NG：{raw}", Color.Red);
-
-                bool ncOk = FormHelper.NcComplete(
-                    _mesUrl, _loginId, _clientId, sfc,
-                    stationId, "CCD NG", raw, "CCD",
-                    schedulingId, out string ncMsg);
-
-                if (ncOk)
-                    AddLogMessage("NcComplete成功", Color.Green);
-                else
-                    AddLogMessage($"NcComplete失败：{ncMsg}", Color.Red);
-
-                MarkFail();
-            }
-
-            // 仅当 SFC Log 校验通过时：变更工站 + 补充 AddSfcKey
-            if (_sfcLogPassed)
-            {
-                // ChangeSfcStation：工站名传第一条符合规则的 logStation
-                bool changeOk = FormHelper.ChangeSfcStation(
-                    _mesUrl, _loginId, _clientId, sfc,
-                    _firstLogStation, out string changeMsg);
-                if (changeOk)
-                    AddLogMessage($"ChangeSfcStation成功：→ [{_firstLogStation}]", Color.Green);
-                else
-                    AddLogMessage($"ChangeSfcStation失败：{changeMsg}", Color.Red);
-
-                // 补充 AddSfcKey：DATA_NAME 本地维护，DATA_VALUE 传 CCD 信息
-                string extraDataName = g_DicMESConfig["SOFTWARE"].ContainsKey("addSfcKeyDataName")
-                    ? g_DicMESConfig["SOFTWARE"]["addSfcKeyDataName"] : "";
-                if (!string.IsNullOrEmpty(extraDataName))
-                {
-                    FormHelper.AddSfcKey(
-                        _mesUrl, _loginId, _clientId,
-                        sfc, stationId, operation, shopOrder,
-                        extraDataName, raw,
-                        projectId, productId,
-                        out string extraMsg);
-                    AddLogMessage($"补充AddSfcKey（{extraDataName}）：{extraMsg}", Color.Blue);
-                }
-            }
-        }
-
-        /// <summary>更新 CCD 状态标签（线程安全）</summary>
-        private void SetCcdStatus(bool connected)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action(() => SetCcdStatus(connected)));
-                return;
-            }
-            _ccdConnected = connected;
-            uiLabel4.Text = connected ? "已连接" : "未连接";
-            uiLabel4.BackColor = connected ? Color.DodgerBlue : Color.Red;
         }
 
         /// <summary>

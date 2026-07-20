@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -7,6 +7,7 @@ namespace WindowsFormsApp
 {
     public class FormHelper
     {
+        /// <summary>产品入站</summary>
         public static bool Start(string url, string loginId, string clientId, string sfc, string stationName, string line, string shoporder, string schingId, out string msg)
         {
             var param = new
@@ -38,7 +39,8 @@ namespace WindowsFormsApp
             }
         }
 
-        public static bool Complete(string url, string loginId, string clientId, string sfc, string stationid, string schingId, string remark, out string msg)
+        /// <summary>良品过站完成</summary>
+        public static bool Complete(string url, string loginId, string clientId, string sfc, string stationid, string schingId, string remark, string time, out string msg)
         {
             var param = new
             {
@@ -47,7 +49,8 @@ namespace WindowsFormsApp
                 SFC = sfc,
                 STATION_ID = stationid,
                 SCHEDULING_ID = schingId,
-                REMARK = remark
+                REMARK = remark,
+                time = time
             };
             string content = "?method=Complete&param=" + JsonConvert.SerializeObject(param);
 
@@ -68,12 +71,8 @@ namespace WindowsFormsApp
             }
         }
 
-        /// <summary>
-        /// 根据 SFC 获取 SFC Log 列表，用于校验条码是否在正确工站流转
-        /// </summary>
-        public static bool GetSfcLogListByParam(
-            string url, string loginId, string clientId, string sfc,
-            out JArray dataList, out string msg)
+        /// <summary>获取自定义数据（SFCRule / SubSFCRule / NumberStore 等）</summary>
+        public static bool GetCustomData(string url, string loginId, string clientId, string productId, out List<GetCustomDataItem> dataList, out string msg)
         {
             dataList = null;
             msg = "";
@@ -82,76 +81,26 @@ namespace WindowsFormsApp
             {
                 LOGIN_ID = loginId,
                 CLIENT_ID = clientId,
-                SFC = sfc
-            };
-            string content = "?method=GetSfcLogListByParam&param=" + JsonConvert.SerializeObject(param);
-
-            try
-            {
-                HttpUitls ht = new HttpUitls();
-                WriteLogs.WriteLog("GetSfcLogListByParam Send:" + url + content);
-                string str_result = ht.Get(url + content, 2000);
-                WriteLogs.WriteLog("GetSfcLogListByParam Receive:" + str_result);
-
-                JObject json = JObject.Parse(str_result);
-                string result = json["RESULT"]?.ToString();
-                if (result == "PASS")
-                {
-                    dataList = json["DATA"] as JArray;
-                    return true;
-                }
-                else
-                {
-                    msg = json["MESSAGE"]?.ToString() ?? "接口返回失败";
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                msg = ex.Message;
-                WriteLogs.WriteLog("GetSfcLogListByParam Error:" + msg);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 上报数据绑定结果到 MES（CCD 结果 / 业务数据）
-        /// </summary>
-        public static bool AddSfcKey(
-            string url, string loginId, string clientId,
-            string sfc, string stationId, string stationName,
-            string shopOrder, string dataName, string dataValue,
-            string projectId, string productId,
-            out string msg)
-        {
-            msg = "";
-
-            var param = new
-            {
-                LOGIN_ID = loginId,
-                CLIENT_ID = clientId,
-                SFC = sfc,
-                STATION_ID = stationId,
-                STATION_NAME = stationName,
-                SHOPORDER = shopOrder,
-                DATA_NAME = dataName,
-                DATA_VALUE = dataValue,
-                PROJECT_ID = projectId,
                 PRODUCT_ID = productId
             };
-            string content = "?method=AddSfcKey&param=" + JsonConvert.SerializeObject(param);
+            string content = "?method=GetCustomData&param=" + JsonConvert.SerializeObject(param);
 
             try
             {
                 HttpUitls ht = new HttpUitls();
-                WriteLogs.WriteLog("AddSfcKey Send:" + url + content);
+                WriteLogs.WriteLog("GetCustomData Send:" + url + content);
                 string str_result = ht.Get(url + content, 2000);
-                WriteLogs.WriteLog("AddSfcKey Receive:" + str_result);
+                WriteLogs.WriteLog("GetCustomData Receive:" + str_result);
 
                 JObject json = JObject.Parse(str_result);
                 string result = json["RESULT"]?.ToString();
                 if (result == "PASS")
                 {
+                    JArray arr = json["DATA"] as JArray;
+                    if (arr != null)
+                    {
+                        dataList = arr.ToObject<List<GetCustomDataItem>>();
+                    }
                     return true;
                 }
                 else
@@ -163,19 +112,63 @@ namespace WindowsFormsApp
             catch (Exception ex)
             {
                 msg = ex.Message;
-                WriteLogs.WriteLog("AddSfcKey Error:" + msg);
+                WriteLogs.WriteLog("GetCustomData Error:" + msg);
                 return false;
             }
         }
 
         /// <summary>
-        /// 不合格品过站完成（NC Complete）
+        /// 查询纸码是否已被使用。
+        /// 返回 isUsed：NEWSFC_DATA 或 OLDSFC_DATA 任一不为 null 即为已使用。
         /// </summary>
-        public static bool NcComplete(
-            string url, string loginId, string clientId,
-            string sfc, string stationId, string ncCode,
-            string ncContext, string ncType, string schedulingId,
-            out string msg)
+        public static bool GetSerializeData(string url, string loginId, string clientId, string sfc, out bool isUsed, out string msg)
+        {
+            isUsed = true;
+            msg = "";
+
+            var param = new
+            {
+                LOGIN_ID = loginId,
+                CLIENT_ID = clientId,
+                SFC = sfc
+            };
+            string content = "?method=GetSerializeData&param=" + JsonConvert.SerializeObject(param);
+
+            try
+            {
+                HttpUitls ht = new HttpUitls();
+                WriteLogs.WriteLog("GetSerializeData Send:" + url + content);
+                string str_result = ht.Get(url + content, 2000);
+                WriteLogs.WriteLog("GetSerializeData Receive:" + str_result);
+
+                JObject json = JObject.Parse(str_result);
+                string result = json["RESULT"]?.ToString();
+                if (result == "PASS")
+                {
+                    JToken newSfc = json["NEWSFC_DATA"];
+                    JToken oldSfc = json["OLDSFC_DATA"];
+                    // 两者都为 null 才算未使用
+                    bool newIsNull = newSfc == null || newSfc.Type == JTokenType.Null;
+                    bool oldIsNull = oldSfc == null || oldSfc.Type == JTokenType.Null;
+                    isUsed = !(newIsNull && oldIsNull);
+                    return true;
+                }
+                else
+                {
+                    msg = json["MESSAGE"]?.ToString() ?? "接口返回失败";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                msg = ex.Message;
+                WriteLogs.WriteLog("GetSerializeData Error:" + msg);
+                return false;
+            }
+        }
+
+        /// <summary>SFC 序列化绑定（镭雕码 + 纸码一对一绑定）</summary>
+        public static bool Serializable(string url, string loginId, string clientId, string sfc, string schedulingId, string boardCount, string stationId, List<string> newSfcList, string sfcState, out string msg)
         {
             msg = "";
 
@@ -184,20 +177,20 @@ namespace WindowsFormsApp
                 LOGIN_ID = loginId,
                 CLIENT_ID = clientId,
                 SFC = sfc,
+                SCHEDULING_ID = schedulingId,
+                BOARD_COUNT = boardCount,
                 STATION_ID = stationId,
-                NC_CODE = ncCode,
-                NC_CONTEXT = ncContext,
-                NC_TYPE = ncType,
-                SCHEDULING_ID = schedulingId
+                NEW_SFC_LIST = newSfcList,
+                SFC_STATE = sfcState
             };
-            string content = "?method=NcComplete&param=" + JsonConvert.SerializeObject(param);
+            string content = "?method=Serializable&param=" + JsonConvert.SerializeObject(param);
 
             try
             {
                 HttpUitls ht = new HttpUitls();
-                WriteLogs.WriteLog("NcComplete Send:" + url + content);
+                WriteLogs.WriteLog("Serializable Send:" + url + content);
                 string str_result = ht.Get(url + content, 2000);
-                WriteLogs.WriteLog("NcComplete Receive:" + str_result);
+                WriteLogs.WriteLog("Serializable Receive:" + str_result);
 
                 JObject json = JObject.Parse(str_result);
                 string result = json["RESULT"]?.ToString();
@@ -214,55 +207,9 @@ namespace WindowsFormsApp
             catch (Exception ex)
             {
                 msg = ex.Message;
-                WriteLogs.WriteLog("NcComplete Error:" + msg);
+                WriteLogs.WriteLog("Serializable Error:" + msg);
                 return false;
             }
         }
-
-        /// <summary>
-        /// 变更 SFC 当前工站
-        /// </summary>
-        public static bool ChangeSfcStation(
-            string url, string loginId, string clientId,
-            string sfc, string newStationName, out string msg)
-        {
-            msg = "";
-
-            var param = new
-            {
-                LOGIN_ID = loginId,
-                CLIENT_ID = clientId,
-                SFC = sfc,
-                NEW_STATION_NAME = newStationName
-            };
-            string content = "?method=ChangeSfcStation&param=" + JsonConvert.SerializeObject(param);
-
-            try
-            {
-                HttpUitls ht = new HttpUitls();
-                WriteLogs.WriteLog("ChangeSfcStation Send:" + url + content);
-                string str_result = ht.Get(url + content, 2000);
-                WriteLogs.WriteLog("ChangeSfcStation Receive:" + str_result);
-
-                JObject json = JObject.Parse(str_result);
-                string result = json["RESULT"]?.ToString();
-                if (result == "PASS")
-                {
-                    return true;
-                }
-                else
-                {
-                    msg = json["MESSAGE"]?.ToString() ?? "接口返回失败";
-                    return false;
-                }
-            }
-            catch (Exception ex)
-            {
-                msg = ex.Message;
-                WriteLogs.WriteLog("ChangeSfcStation Error:" + msg);
-                return false;
-            }
-        }
-
     }
 }
