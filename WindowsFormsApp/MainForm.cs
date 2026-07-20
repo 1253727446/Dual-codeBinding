@@ -55,6 +55,10 @@ namespace WindowsFormsApp
         private int _scanPort;
         /// <summary>扫码枪健康检查定时器</summary>
         private System.Timers.Timer _scanHealthTimer;
+        /// <summary>扫码枪最后一次收到数据的时间</summary>
+        private DateTime _lastScanDataTime = DateTime.MinValue;
+        /// <summary>健康检查连续失败计数（需连续2次才触发重连）</summary>
+        private int _scanFailCount = 0;
         /// <summary>后台任务取消令牌</summary>
         private CancellationTokenSource _cts;
 
@@ -344,6 +348,7 @@ namespace WindowsFormsApp
         /// </summary>
         private void scanclient_DataReceived(object sender, SimpleTCP.Message e)
         {
+            _lastScanDataTime = DateTime.Now;  // 记录最后收数据时间
             string code = e.MessageString.Replace("\r", "").Replace("\n", "").Replace(" ", "");
             if (string.IsNullOrEmpty(code)) return;
 
@@ -742,6 +747,8 @@ namespace WindowsFormsApp
                 uiLabel.Text = "已连接";
                 uiLabel.BackColor = Color.DodgerBlue;
                 AddLogMessage("扫码枪连接成功", Color.Green);
+                _lastScanDataTime = DateTime.Now;   // 重置收数据时间，避免首次检测误判
+                _scanFailCount = 0;
                 // 扫码枪连接成功 → 进入等待状态
                 EnterWaitingState();
             }
@@ -754,7 +761,7 @@ namespace WindowsFormsApp
             }
         }
 
-        /// <summary>启动扫码枪健康检查定时器：每 3 秒探测一次，断线自动重连</summary>
+        /// <summary>启动扫码枪健康检查定时器：每 10 秒检测一次，断线自动重连</summary>
         private void StartScanHealthCheck()
         {
             _scanHealthTimer = new System.Timers.Timer(10000);
@@ -763,16 +770,28 @@ namespace WindowsFormsApp
                 if (_scanReconnecting) return;
 
                 bool alive = IsScannerAlive();
+                if (alive)
+                {
+                    _scanFailCount = 0;  // 恢复则清零
+                }
+
                 if (_scanConnected && !alive)
                 {
-                    BeginInvoke(new Action(() =>
+                    _scanFailCount++;
+                    // 需连续 2 次失败才认定为断开（避免 Poll 假阳性）
+                    if (_scanFailCount >= 2)
                     {
-                        AddLogMessage("检测到扫码枪已断开", Color.Red);
-                        SetScanStatus(false);
-                    }));
+                        BeginInvoke(new Action(() =>
+                        {
+                            AddLogMessage("检测到扫码枪已断开", Color.Red);
+                            SetScanStatus(false);
+                        }));
+                        _scanFailCount = 0;
+                    }
                 }
                 else if (!_scanConnected && alive)
                 {
+                    _scanFailCount = 0;
                     BeginInvoke(new Action(() => AddLogMessage("检测到扫码枪端口可达，开始重连")));
                     _ = ReconnectScanner();
                 }
@@ -780,16 +799,20 @@ namespace WindowsFormsApp
             _scanHealthTimer.Start();
         }
 
-        /// <summary>通过已有 scanclient 的底层 Socket 判断连接是否存活（不发新连接）</summary>
+        /// <summary>判断扫码枪连接是否存活</summary>
         private bool IsScannerAlive()
         {
             try
             {
                 if (scanclient == null) return false;
+                // 最近 10 秒内收到过数据 → 必然存活，跳过 socket 检测
+                if ((DateTime.Now - _lastScanDataTime).TotalSeconds < 10)
+                    return true;
+
                 var tcp = GetUnderlyingTcpClient(scanclient);
                 if (tcp == null || tcp.Client == null) return false;
-                // Poll(0, SelectRead) 返回 true 且 Available==0 表示对端已关闭
-                bool disconnected = tcp.Client.Poll(0, SelectMode.SelectRead) && tcp.Client.Available == 0;
+                // Poll(1000us) 给 1ms 让底层有时间响应
+                bool disconnected = tcp.Client.Poll(1000, SelectMode.SelectRead) && tcp.Client.Available == 0;
                 return !disconnected;
             }
             catch (Exception) { return false; }
@@ -842,6 +865,8 @@ namespace WindowsFormsApp
                     }, token);
                     _scanReconnecting = false;
                     AddLogMessage($"扫码枪重连成功（第{i}次尝试）", Color.Green);
+                    _lastScanDataTime = DateTime.Now;
+                    _scanFailCount = 0;
                     SetScanStatus(true);
                     // 重连成功 → 进入等待状态
                     BeginInvoke(new Action(() => EnterWaitingState()));
