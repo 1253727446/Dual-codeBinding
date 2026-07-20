@@ -403,10 +403,12 @@ namespace WindowsFormsApp
                 }
                 AddLogMessage($"SFCRule=[{_sfcRule}]", Color.Blue);
 
-                // 2. 镭雕码格式校验
+                // 2. 镭雕码格式校验（? → 正则 . 匹配任意单字符，^$ 全匹配）
                 try
                 {
-                    if (!Regex.IsMatch(laserCode, _sfcRule))
+                    // 将 SFCRule 中的 ? 转为正则 . , 转义已有正则特殊字符, 加全匹配锚点
+                    string pattern = "^" + Regex.Escape(_sfcRule).Replace(@"\?", ".") + "$";
+                    if (!Regex.IsMatch(laserCode, pattern))
                     {
                         ShowFail("镭雕码格式错误，请重新输入");
                         return;
@@ -453,10 +455,11 @@ namespace WindowsFormsApp
                     return;
                 }
 
-                // 1. 纸码格式校验
+                // 1. 纸码格式校验（? → 正则 . 匹配任意单字符，^$ 全匹配）
                 try
                 {
-                    if (!Regex.IsMatch(paperCode, _subSfcRule))
+                    string pattern = "^" + Regex.Escape(_subSfcRule).Replace(@"\?", ".") + "$";
+                    if (!Regex.IsMatch(paperCode, pattern))
                     {
                         ShowFail("纸码格式错误，请重新输入");
                         return;
