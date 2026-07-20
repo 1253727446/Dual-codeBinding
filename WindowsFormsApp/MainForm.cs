@@ -139,17 +139,71 @@ namespace WindowsFormsApp
             var cfg = g_DicMESConfig["Config"];
             var setting = g_DicMESConfig["Setting"];
 
-            // 顶部信息栏：静态标签保持设计器默认值，动态值标签填入配置
+            // 顶部信息栏：先设文本，再自适应布局
             uiLabel9.Text = cfg.ContainsKey("PROJECT") ? cfg["PROJECT"] : "";            // 项目
             uiLabel11.Text = cfg.ContainsKey("Line") ? cfg["Line"] : "";                 // 线体
             uiLabel13.Text = cfg.ContainsKey("Resource") ? cfg["Resource"] : "";         // 工单
             uiLabel15.Text = cfg.ContainsKey("Operation") ? cfg["Operation"] : "";       // 工站
+            LayoutTopInfoBar();
 
             // 班次配置（默认白班8:00-20:00，夜班20:00-次日8:00）
             if (setting.ContainsKey("dayShiftStart"))
                 int.TryParse(setting["dayShiftStart"], out _dayShiftStartHour);
             if (setting.ContainsKey("nightShiftStart"))
                 int.TryParse(setting["nightShiftStart"], out _nightShiftStartHour);
+        }
+
+        /// <summary>自适应布局顶部信息栏四个标签对：项目/线体/工单/工站</summary>
+        private void LayoutTopInfoBar()
+        {
+            int panelW = uiPanel2.Width;
+            int y = 7, h = 19, gap = 4, minValW = 50;
+            Font f = uiLabel9.Font;
+
+            // 四对标签：label + value
+            var pairs = new[] {
+                (label: projectName, value: (UILabel)uiLabel9,  text: "项目"),
+                (label: line,        value: (UILabel)uiLabel11, text: "线体"),
+                (label: shopOrder,   value: (UILabel)uiLabel13, text: "工单"),
+                (label: stationName, value: (UILabel)uiLabel15, text: "工站"),
+            };
+
+            // 先计算所有标签自然宽度
+            int[] labelW = new int[4];
+            int[] valueW = new int[4];
+            for (int i = 0; i < 4; i++)
+            {
+                labelW[i] = TextRenderer.MeasureText(pairs[i].text, f).Width + 4;
+                valueW[i] = Math.Max(minValW, TextRenderer.MeasureText(pairs[i].value.Text, f).Width + 8);
+            }
+
+            // 总自然宽度 = 标签宽 + 间隔 + 值宽 + 对间距
+            int totalNatural = 0;
+            for (int i = 0; i < 4; i++)
+                totalNatural += labelW[i] + gap + valueW[i] + (i < 3 ? 12 : 0);
+
+            // 如果超出面板宽度，按比例压缩 value 宽度
+            if (totalNatural > panelW - 8)
+            {
+                int overflow = totalNatural - (panelW - 8);
+                // 每个 value 平均分担
+                int eachCut = overflow / 4 + 1;
+                for (int i = 0; i < 4; i++)
+                    valueW[i] = Math.Max(30, valueW[i] - eachCut);
+            }
+
+            // 布局
+            int x = 4;
+            for (int i = 0; i < 4; i++)
+            {
+                pairs[i].label.Location = new Point(x, y);
+                pairs[i].label.Size = new Size(labelW[i], h);
+                x += labelW[i] + gap;
+
+                pairs[i].value.Location = new Point(x, y);
+                pairs[i].value.Size = new Size(valueW[i], h);
+                x += valueW[i] + 12;
+            }
         }
 
         /// <summary>
@@ -290,8 +344,8 @@ namespace WindowsFormsApp
             uiTextBox1.Enabled = false;
 
             uiLabel2.Text = "等待中";
-            uiLabel2.BackColor = Color.DodgerBlue;
-            uiLabel2.ForeColor = Color.White;
+            uiLabel2.BackColor = Color.Gold;
+            uiLabel2.ForeColor = Color.Black;
 
             ClearRecoveryState();
         }
@@ -380,16 +434,18 @@ namespace WindowsFormsApp
             {
                 // 1. 获取自定义数据（规则）
                 string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
+                AddLogMessage($"[{laserCode}]GetCustomData Send -> PRODUCT_ID={productId} | URL={_mesUrl}", Color.Blue, $"[{laserCode}]GetCustomData...");
                 bool dataOk = FormHelper.GetCustomData(
                     _mesUrl, _loginId, _clientId, productId,
                     out List<GetCustomDataItem> dataList, out string dataMsg);
 
                 if (!dataOk || dataList == null || dataList.Count == 0)
                 {
-                    AddLogMessage($"GetCustomData失败：{dataMsg}", Color.Red);
+                    AddLogMessage($"[{laserCode}]GetCustomData Receive: FAIL | {dataMsg}", Color.Red, $"[{laserCode}]GetCustomData↘ FAIL");
                     ShowFail(dataMsg);
                     return;
                 }
+                AddLogMessage($"[{laserCode}]GetCustomData Receive: PASS | {dataList.Count}条规则 | SFCRule=[{dataList.Find(x => x.NAME == "SFCRule")?.VALUE}]", Color.Green, $"GetCustomData↘ PASS({dataList.Count}条)");
 
                 _customData = dataList;
 
@@ -404,10 +460,11 @@ namespace WindowsFormsApp
 
                 if (string.IsNullOrEmpty(_sfcRule))
                 {
+                    AddLogMessage($"[{laserCode}]未配置SFCRule规则", Color.Red);
                     ShowFail("未配置SFCRule规则");
                     return;
                 }
-                AddLogMessage($"SFCRule=[{_sfcRule}]", Color.Blue);
+                AddLogMessage($"[{laserCode}]SFCRule=[{_sfcRule}], SubSFCRule=[{_subSfcRule}]", Color.Blue, $"[{laserCode}]规则: SFCRule=[{_sfcRule}]");
 
                 // 2. 镭雕码格式校验（? → 正则 . 匹配任意单字符，^$ 全匹配）
                 try
@@ -416,16 +473,18 @@ namespace WindowsFormsApp
                     string pattern = "^" + Regex.Escape(_sfcRule).Replace(@"\?", ".") + "$";
                     if (!Regex.IsMatch(laserCode, pattern))
                     {
+                        AddLogMessage($"[{laserCode}]镭雕码格式校验不通过，输入={laserCode}，规则=[{_sfcRule}]", Color.Red);
                         ShowFail("镭雕码格式错误，请重新输入");
                         return;
                     }
                 }
                 catch (Exception ex)
                 {
+                    AddLogMessage($"[{laserCode}]SFCRule正则解析异常：{ex.Message}", Color.Red);
                     ShowFail("SFCRule正则解析异常：" + ex.Message);
                     return;
                 }
-                AddLogMessage("镭雕码格式校验通过", Color.Green);
+                AddLogMessage($"[{laserCode}]镭雕码格式校验通过，规则=[{_sfcRule}]", Color.Green, $"[{laserCode}]镭雕码校验通过");
 
                 // 3. MES Start 入站
                 _currentLaserCode = laserCode;
@@ -435,14 +494,13 @@ namespace WindowsFormsApp
                     ShowFail("Start失败");
                     return;
                 }
-                AddLogMessage("Start成功", Color.Green);
 
                 // 4. 进入加工中状态
                 BeginInvoke(new Action(() => EnterProcessingState()));
             }
             catch (Exception ex)
             {
-                AddLogMessage("镭雕码处理异常：" + ex.Message, Color.Red);
+                AddLogMessage($"[{laserCode}]镭雕码处理异常：{ex.Message}", Color.Red);
                 ShowFail(ex.Message);
             }
         }
@@ -457,6 +515,7 @@ namespace WindowsFormsApp
             {
                 if (string.IsNullOrEmpty(_subSfcRule))
                 {
+                    AddLogMessage($"[{paperCode}]未配置SubSFCRule规则", Color.Red);
                     ShowFail("未配置SubSFCRule规则");
                     return;
                 }
@@ -467,61 +526,69 @@ namespace WindowsFormsApp
                     string pattern = "^" + Regex.Escape(_subSfcRule).Replace(@"\?", ".") + "$";
                     if (!Regex.IsMatch(paperCode, pattern))
                     {
+                        AddLogMessage($"[{paperCode}]纸码格式校验不通过，输入={paperCode}，规则=[{_subSfcRule}]", Color.Red);
                         ShowFail("纸码格式错误，请重新输入");
                         return;
                     }
                 }
                 catch (Exception ex)
                 {
+                    AddLogMessage($"[{paperCode}]SubSFCRule正则解析异常：{ex.Message}", Color.Red);
                     ShowFail("SubSFCRule正则解析异常：" + ex.Message);
                     return;
                 }
-                AddLogMessage("纸码格式校验通过", Color.Green);
+                AddLogMessage($"[{paperCode}]纸码格式校验通过，规则=[{_subSfcRule}]", Color.Green);
 
                 // 2. GetSerializeData 查重
+                AddLogMessage($"[{paperCode}]GetSerializeData Send -> 纸码={paperCode}", Color.Blue, $"[{paperCode}]查重...");
                 bool chkOk = FormHelper.GetSerializeData(
                     _mesUrl, _loginId, _clientId, paperCode,
                     out bool isUsed, out string chkMsg);
 
                 if (!chkOk)
                 {
+                    AddLogMessage($"[{paperCode}]GetSerializeData Receive: FAIL | {chkMsg}", Color.Red, $"[{paperCode}]查重↘ FAIL");
                     ShowFail(chkMsg);
                     return;
                 }
 
                 if (isUsed)
                 {
+                    AddLogMessage($"[{paperCode}]GetSerializeData Receive: PASS(已使用) | 纸码={paperCode}", Color.Red, $"[{paperCode}]查重↘ 已使用");
                     ShowFail("该纸码已经使用，请重新输入新纸码");
                     return;
                 }
-                AddLogMessage("纸码未使用，可以绑定", Color.Green);
+                AddLogMessage($"[{paperCode}]GetSerializeData Receive: PASS(未使用) | 纸码={paperCode}", Color.Green, $"[{paperCode}]查重↘ 未使用");
 
                 // 3. Serializable 绑定
                 string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
                 string stationId = g_DicMESConfig["Config"]["StationID"];
 
+                AddLogMessage($"[{paperCode}]Serializable Send -> SFC={_currentLaserCode}, NEW_SFC_LIST=[{paperCode}], Station={stationId}", Color.Blue, $"[{paperCode}]绑定...");
                 bool bindOk = FormHelper.Serializable(
                     _mesUrl, _loginId, _clientId,
-                    paperCode,
+                    _currentLaserCode,                       // SFC = 镭雕二维码
                     schedulingId,
-                    "1",                       // BOARD_COUNT
+                    "1",                                     // BOARD_COUNT
                     stationId,
-                    new List<string> { _currentLaserCode },  // NEW_SFC_LIST
-                    "C",                       // SFC_STATE
+                    new List<string> { paperCode },          // NEW_SFC_LIST = 纸码
+                    "C",                                     // SFC_STATE
                     out string bindMsg);
 
                 if (!bindOk)
                 {
+                    AddLogMessage($"[{paperCode}]Serializable Receive: FAIL | {bindMsg}", Color.Red, $"[{paperCode}]绑定↘ FAIL");
                     ShowFail(bindMsg);
                     return;
                 }
-                AddLogMessage("绑定成功", Color.Green);
+                AddLogMessage($"[{paperCode}]Serializable Receive: PASS | SFC={_currentLaserCode} ↔ NEW_SFC={paperCode}", Color.Green, $"[{paperCode}]绑定↘ PASS");
 
                 // 4. Complete 出站
                 string remark = g_DicMESConfig["Config"].ContainsKey("remark1")
                     ? g_DicMESConfig["Config"]["remark1"] : "";
                 string time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
+                AddLogMessage($"[{paperCode}]Complete Send -> Station={stationId}, Scheduling={schedulingId}", Color.Blue, $"[{paperCode}]出站...");
                 bool cplOk = FormHelper.Complete(
                     _mesUrl, _loginId, _clientId, paperCode,
                     stationId, schedulingId, remark, time,
@@ -529,17 +596,18 @@ namespace WindowsFormsApp
 
                 if (cplOk)
                 {
-                    AddLogMessage("Complete成功", Color.Green);
+                    AddLogMessage($"[{paperCode}]Complete Receive: PASS | Station={stationId}", Color.Green, $"[{paperCode}]出站↘ PASS");
                     BeginInvoke(new Action(() => ShowPass()));
                 }
                 else
                 {
+                    AddLogMessage($"[{paperCode}]Complete Receive: FAIL | {cplMsg} | Station={stationId}", Color.Red, $"[{paperCode}]出站↘ FAIL");
                     ShowFail(cplMsg);
                 }
             }
             catch (Exception ex)
             {
-                AddLogMessage("纸码处理异常：" + ex.Message, Color.Red);
+                AddLogMessage($"[{paperCode}]纸码处理异常：{ex.Message}", Color.Red);
                 ShowFail(ex.Message);
             }
         }
@@ -560,14 +628,17 @@ namespace WindowsFormsApp
                 string ShopOrder = g_DicMESConfig["Config"]["Resource"];
                 string SchingID = g_DicMESConfig["Config"]["SchedulingID"];
 
+                AddLogMessage($"[{SFC}]Start Send -> Station={StationName}, Line={Line}, Order={ShopOrder}", Color.Blue, $"[{SFC}]Start...");
                 bool flag = FormHelper.Start(_mesUrl, _loginId, _clientId, SFC, StationName, Line, ShopOrder, SchingID, out string msg);
                 if (!flag)
-                    AddLogMessage("Start失败：" + msg, Color.Red);
+                    AddLogMessage($"[{SFC}]Start Receive: FAIL | {msg} | Station={StationName}", Color.Red, $"[{SFC}]Start↘ FAIL");
+                else
+                    AddLogMessage($"[{SFC}]Start Receive: PASS | Station={StationName}, Line={Line}", Color.Green, $"[{SFC}]Start↘ PASS");
                 return flag;
             }
             catch (Exception ex)
             {
-                AddLogMessage("Start异常：" + ex.Message, Color.Red);
+                AddLogMessage($"[{SFC}]Start异常：{ex.Message}", Color.Red);
                 return false;
             }
         }
@@ -577,30 +648,32 @@ namespace WindowsFormsApp
         // ============================================================
 
         /// <summary>
-        /// 向日志 RichTextBox 追加时间戳日志，自动处理跨线程调用；
-        /// 超过 100 行时自动清屏
+        /// 向日志框和本地文件追加时间戳日志，自动处理跨线程调用。
+        /// 超过 200 行时自动清屏。
         /// </summary>
-        /// <param name="message">日志内容</param>
-        /// <param name="color">文字颜色，默认黑色（成功=Green，失败=Red）</param>
-        private void AddLogMessage(string message, Color? color = null)
+        /// <param name="message">写入本地文件的完整日志（含技术细节）</param>
+        /// <param name="color">UI 文字颜色</param>
+        /// <param name="consoleMessage">UI 显示的简洁消息，为 null 则显示 message</param>
+        private void AddLogMessage(string message, Color? color = null, string consoleMessage = null)
         {
             if (this.InvokeRequired)
             {
-                this.BeginInvoke(new Action(() => AddLogMessage(message, color)));
+                this.BeginInvoke(new Action(() => AddLogMessage(message, color, consoleMessage)));
                 return;
             }
 
             Color useColor = color ?? Color.Black;
-            if (this.uiRichTextBox1.Lines.Length > 100)
+            if (this.uiRichTextBox1.Lines.Length > 200)
                 this.uiRichTextBox1.Text = string.Empty;
 
             string fe = "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "]: ";
             this.uiRichTextBox1.SelectionStart = this.uiRichTextBox1.TextLength;
             this.uiRichTextBox1.SelectionColor = useColor;
-            this.uiRichTextBox1.AppendText(fe + message + "\r\n");
+            this.uiRichTextBox1.AppendText(fe + (consoleMessage ?? message) + "\r\n");
             this.uiRichTextBox1.SelectionStart = this.uiRichTextBox1.TextLength;
             this.uiRichTextBox1.ScrollToCaret();
-            WriteLogs.WriteLog(message);
+            // 文件日志始终写完整 message（含毫秒时间戳）
+            WriteLogs.WriteLog(fe + message);
         }
 
         // ============================================================
