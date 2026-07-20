@@ -756,13 +756,13 @@ namespace WindowsFormsApp
         /// <summary>启动扫码枪健康检查定时器：每 3 秒探测一次，断线自动重连</summary>
         private void StartScanHealthCheck()
         {
-            _scanHealthTimer = new System.Timers.Timer(3000);
+            _scanHealthTimer = new System.Timers.Timer(10000);
             _scanHealthTimer.Elapsed += (s, ev) =>
             {
                 if (_scanReconnecting) return;
 
-                bool reachable = ProbeScanner();
-                if (_scanConnected && !reachable)
+                bool alive = IsScannerAlive();
+                if (_scanConnected && !alive)
                 {
                     BeginInvoke(new Action(() =>
                     {
@@ -770,7 +770,7 @@ namespace WindowsFormsApp
                         SetScanStatus(false);
                     }));
                 }
-                else if (!_scanConnected && reachable)
+                else if (!_scanConnected && alive)
                 {
                     BeginInvoke(new Action(() => AddLogMessage("检测到扫码枪端口可达，开始重连")));
                     _ = ReconnectScanner();
@@ -779,21 +779,40 @@ namespace WindowsFormsApp
             _scanHealthTimer.Start();
         }
 
-        /// <summary>用短超时 TcpClient 探测扫码枪端口是否可达</summary>
-        private bool ProbeScanner()
+        /// <summary>通过已有 scanclient 的底层 Socket 判断连接是否存活（不发新连接）</summary>
+        private bool IsScannerAlive()
         {
             try
             {
-                using (var client = new System.Net.Sockets.TcpClient())
-                {
-                    var ar = client.BeginConnect(_scanIp, _scanPort, null, null);
-                    bool connected = ar.AsyncWaitHandle.WaitOne(1000);
-                    try { client.EndConnect(ar); } catch { }
-                    if (connected && client.Connected) return true;
-                }
+                if (scanclient == null) return false;
+                var tcp = GetUnderlyingTcpClient(scanclient);
+                if (tcp == null || tcp.Client == null) return false;
+                // Poll(0, SelectRead) 返回 true 且 Available==0 表示对端已关闭
+                bool disconnected = tcp.Client.Poll(0, SelectMode.SelectRead) && tcp.Client.Available == 0;
+                return !disconnected;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>用反射获取 SimpleTcpClient 内部的 TcpClient</summary>
+        private System.Net.Sockets.TcpClient GetUnderlyingTcpClient(SimpleTcpClient client)
+        {
+            try
+            {
+                var t = client.GetType();
+                var prop = t.GetProperty("Client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("_client",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?? t.GetProperty("tcpClient",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (prop != null && prop.GetValue(client) is System.Net.Sockets.TcpClient tcp)
+                    return tcp;
             }
             catch (Exception) { }
-            return false;
+            return null;
         }
 
         /// <summary>扫码枪重连：断开旧连接 → 新建客户端 → 最多 5 次尝试，每次间隔 3 秒</summary>
@@ -854,23 +873,14 @@ namespace WindowsFormsApp
         }
 
         /// <summary>
-        /// 利用反射设置 SimpleTcpClient 内部 TcpClient 的 SendTimeout / ReceiveTimeout
-        /// 防止断开连接时卡住 UI 线程
+        /// 设置 SimpleTcpClient 内部 TcpClient 的 SendTimeout / ReceiveTimeout
         /// </summary>
         private void SetSocketTimeout(SimpleTcpClient client, int timeoutMs = 2000)
         {
             try
             {
-                var t = client.GetType();
-                var prop = t.GetProperty("Client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("_client",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?? t.GetProperty("tcpClient",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (prop != null && prop.GetValue(client) is System.Net.Sockets.TcpClient tcp)
+                var tcp = GetUnderlyingTcpClient(client);
+                if (tcp != null)
                 {
                     tcp.SendTimeout = timeoutMs;
                     tcp.ReceiveTimeout = timeoutMs;
