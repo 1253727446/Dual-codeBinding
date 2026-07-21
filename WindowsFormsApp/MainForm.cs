@@ -63,8 +63,6 @@ namespace WindowsFormsApp
         private string _sfcRule;
         /// <summary>纸码正则规则（SubSFCRule）</summary>
         private string _subSfcRule;
-        /// <summary>PASS/FAIL 结果展示 2 秒后自动清除</summary>
-        private System.Windows.Forms.Timer _resultTimer;
         /// <summary>绑定流程中断恢复文件路径</summary>
         private readonly string _statePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "state.json");
 
@@ -79,10 +77,6 @@ namespace WindowsFormsApp
             _cts = new CancellationTokenSource();
             _passSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Pass.wav"));
             _failSound = new SoundPlayer(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "FailAlarm.wav"));
-
-            // 结果展示定时器：PASS/FAIL 显示 2 秒后自动回到等待状态
-            _resultTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-            _resultTimer.Tick += (s, e) => { _resultTimer.Stop(); if (_currentLaserCode != null) EnterProcessingState(); else EnterWaitingState(); };
 
             // 注册 USB 扫码枪回车事件（键盘模式）
             SFC_UITextBox.KeyDown += SFC_UITextBox_KeyDown;
@@ -312,8 +306,6 @@ namespace WindowsFormsApp
             try { _cts?.Dispose(); } catch (ObjectDisposedException) { }
             _shiftTimer?.Stop();
             _shiftTimer?.Dispose();
-            _resultTimer?.Stop();
-            _resultTimer?.Dispose();
         }
 
         // ============================================================
@@ -334,7 +326,6 @@ namespace WindowsFormsApp
             _customData = null;
             _sfcRule = null;
             _subSfcRule = null;
-            _resultTimer.Stop();
 
             SFC_UITextBox.Text = "";
             SFC_UITextBox.Enabled = true;
@@ -387,7 +378,7 @@ namespace WindowsFormsApp
                 return;
             }
 
-            uiLabel2.Text = "✓ PASS";
+            uiLabel2.Text = "PASS";
             uiLabel2.BackColor = Color.Green;
             uiLabel2.ForeColor = Color.White;
             try { _passSound?.Play(); } catch { }
@@ -398,10 +389,10 @@ namespace WindowsFormsApp
 
             _currentLaserCode = null;
             ClearRecoveryState();
-            _resultTimer.Start();
+            EnterWaitingState();
         }
 
-        /// <summary>展示 FAIL 结果：红色背景 + 错误信息 + 音效，2 秒后回到等待</summary>
+        /// <summary>展示 FAIL 结果：红色背景 + 错误信息 + 音效，立即切换状态</summary>
         private void ShowFail(string message)
         {
             if (this.InvokeRequired)
@@ -410,7 +401,7 @@ namespace WindowsFormsApp
                 return;
             }
 
-            uiLabel2.Text = $"✘ {message}";
+            uiLabel2.Text = message;
             uiLabel2.BackColor = Color.Red;
             uiLabel2.ForeColor = Color.White;
             try { _failSound?.Play(); } catch { }
@@ -420,7 +411,10 @@ namespace WindowsFormsApp
             FailCount.Text = _failCount.ToString();
 
             AddLogMessage(message, Color.Red);
-            _resultTimer.Start();
+            if (_currentLaserCode != null)
+                EnterProcessingState();
+            else
+                EnterWaitingState();
         }
 
         // ============================================================
@@ -437,18 +431,18 @@ namespace WindowsFormsApp
             {
                 // 1. 获取自定义数据（规则）
                 string productId = g_DicMESConfig["Config"]["PRODUCT_ID"];
-                AddLogMessage($"Send: GetCustomData | [{laserCode}] PRODUCT_ID={productId}", Color.Black, "Send: GetCustomData");
+                AddLogMessage($"Send: GetCustomData | [{laserCode}] PRODUCT_ID={productId}", Color.Black, $"Send: GetCustomData | [{laserCode}]");
                 bool dataOk = FormHelper.GetCustomData(
                     _mesUrl, _loginId, _clientId, productId,
                     out List<GetCustomDataItem> dataList, out string dataMsg);
 
                 if (!dataOk || dataList == null || dataList.Count == 0)
                 {
-                    AddLogMessage($"Receive: FAIL | [{laserCode}] GetCustomData | {dataMsg}", Color.Red, "Receive: FAIL");
+                    AddLogMessage($"Receive: FAIL | [{laserCode}] GetCustomData | {dataMsg}", Color.Red, $"FAIL | [{laserCode}] GetCustomData");
                     ShowFail(dataMsg);
                     return;
                 }
-                AddLogMessage($"Receive: PASS | [{laserCode}] GetCustomData | {dataList.Count}条规则", Color.Green, "Receive: PASS");
+                AddLogMessage($"Receive: PASS | [{laserCode}] GetCustomData | {dataList.Count}条规则", Color.Green, $"PASS | [{laserCode}] GetCustomData");
 
                 _customData = dataList;
 
@@ -543,25 +537,25 @@ namespace WindowsFormsApp
                 AddLogMessage($"[{paperCode}]纸码格式校验通过，规则=[{_subSfcRule}]", Color.Green);
 
                 // 2. GetSerializeData 查重
-                AddLogMessage($"Send: GetSerializeData | [{paperCode}]", Color.Black, "Send: GetSerializeData");
+                AddLogMessage($"Send: GetSerializeData | [{paperCode}]", Color.Black, $"Send: GetSerializeData | [{paperCode}]");
                 bool chkOk = FormHelper.GetSerializeData(
                     _mesUrl, _loginId, _clientId, paperCode,
                     out bool isUsed, out string chkMsg);
 
                 if (!chkOk)
                 {
-                    AddLogMessage($"Receive: FAIL | [{paperCode}] GetSerializeData | {chkMsg}", Color.Red, "Receive: FAIL");
+                    AddLogMessage($"Receive: FAIL | [{paperCode}] GetSerializeData | {chkMsg}", Color.Red, $"FAIL | [{paperCode}] GetSerializeData");
                     ShowFail(chkMsg);
                     return;
                 }
 
                 if (isUsed)
                 {
-                    AddLogMessage($"Receive: PASS(已使用) | [{paperCode}] GetSerializeData", Color.Red, "Receive: PASS(已使用)");
+                    AddLogMessage($"Receive: PASS(已使用) | [{paperCode}] GetSerializeData", Color.Red, $"PASS(已使用) | [{paperCode}]");
                     ShowFail("该纸码已经使用，请重新输入新纸码");
                     return;
                 }
-                AddLogMessage($"Receive: PASS | [{paperCode}] GetSerializeData", Color.Green, "Receive: PASS");
+                AddLogMessage($"Receive: PASS | [{paperCode}] GetSerializeData", Color.Green, $"PASS | [{paperCode}] GetSerializeData");
 
                 // 3. Serializable 绑定
                 string schedulingId = g_DicMESConfig["Config"]["SchedulingID"];
@@ -580,7 +574,7 @@ namespace WindowsFormsApp
 
                 if (!bindOk)
                 {
-                    AddLogMessage($"Receive: FAIL | [{paperCode}] Serializable | {bindMsg}", Color.Red, "Receive: FAIL");
+                    AddLogMessage($"Receive: FAIL | [{paperCode}] Serializable | {bindMsg}", Color.Red, $"FAIL | [{paperCode}] Serializable");
                     ShowFail(bindMsg);
                     return;
                 }
@@ -604,7 +598,7 @@ namespace WindowsFormsApp
                 }
                 else
                 {
-                    AddLogMessage($"Receive: FAIL | [{paperCode}] Complete | {cplMsg}", Color.Red, "Receive: FAIL");
+                    AddLogMessage($"Receive: FAIL | [{paperCode}] Complete | {cplMsg}", Color.Red, $"FAIL | [{paperCode}] Complete");
                     ShowFail(cplMsg);
                 }
             }
@@ -636,7 +630,7 @@ namespace WindowsFormsApp
                 if (!flag)
                     AddLogMessage($"Receive: FAIL | [{SFC}] Start | {msg}", Color.Red, $"FAIL | [{SFC}] {msg}");
                 else
-                    AddLogMessage($"Receive: PASS | [{SFC}] Start | Station={StationName}", Color.Green, "Receive: PASS");
+                    AddLogMessage($"Receive: PASS | [{SFC}] Start | Station={StationName}", Color.Green, $"PASS | [{SFC}] Start");
                 return flag;
             }
             catch (Exception ex)
@@ -791,7 +785,6 @@ namespace WindowsFormsApp
                     MessageBoxIcon.Question);
                 if (result != DialogResult.Yes) return;
             }
-            _resultTimer.Stop();
             EnterWaitingState();
         }
 
@@ -872,6 +865,11 @@ namespace WindowsFormsApp
                 // 夜班（前一天 20:00 开始，跨到次日凌晨）
                 return now.Date.AddDays(-1).AddHours(_nightShiftStartHour);
             }
+        }
+
+        private void uiPanel2_Click(object sender, EventArgs e)
+        {
+            throw new System.NotImplementedException();
         }
     }
 }
