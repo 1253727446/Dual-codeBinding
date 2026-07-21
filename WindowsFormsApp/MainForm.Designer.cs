@@ -100,7 +100,7 @@
             this.pageScan.Name = "pageScan";
             this.pageScan.Size = new System.Drawing.Size(809, 464);
             this.pageScan.TabIndex = 0;
-            this.pageScan.Text = "扫码过站";
+            this.pageScan.Text = "追溯模块";
             // 
             // uiPanel2
             // 
@@ -142,7 +142,7 @@
             this.stationName.Name = "stationName";
             this.stationName.Size = new System.Drawing.Size(64, 19);
             this.stationName.TabIndex = 19;
-            this.stationName.Text = "工站";
+            this.stationName.Text = "工站:";
             this.stationName.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // uiLabel13
@@ -164,7 +164,7 @@
             this.shopOrder.Name = "shopOrder";
             this.shopOrder.Size = new System.Drawing.Size(64, 19);
             this.shopOrder.TabIndex = 17;
-            this.shopOrder.Text = "工单";
+            this.shopOrder.Text = "工单:";
             this.shopOrder.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // uiLabel11
@@ -187,7 +187,7 @@
             this.line.Name = "line";
             this.line.Size = new System.Drawing.Size(51, 19);
             this.line.TabIndex = 15;
-            this.line.Text = "线体";
+            this.line.Text = "线体:";
             this.line.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // uiLabel9
@@ -209,7 +209,7 @@
             this.projectName.Name = "projectName";
             this.projectName.Size = new System.Drawing.Size(63, 19);
             this.projectName.TabIndex = 13;
-            this.projectName.Text = "项目";
+            this.projectName.Text = "项目:";
             this.projectName.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
             // uiButton1
@@ -409,7 +409,7 @@
             this.Controls.Add(this.uiTabControl1);
             this.MaximizeBox = false;
             this.Name = "MainForm";
-            this.Text = "双码过站";
+            this.Text = "双码绑定";
             this.ZoomScaleRect = new System.Drawing.Rectangle(15, 15, 800, 450);
             this.Load += new System.EventHandler(this.Form1_Load);
             this.uiTabControl1.ResumeLayout(false);

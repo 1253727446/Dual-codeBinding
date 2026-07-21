@@ -82,7 +82,7 @@ namespace WindowsFormsApp
 
             // 结果展示定时器：PASS/FAIL 显示 2 秒后自动回到等待状态
             _resultTimer = new System.Windows.Forms.Timer { Interval = 2000 };
-            _resultTimer.Tick += (s, e) => { _resultTimer.Stop(); EnterWaitingState(); };
+            _resultTimer.Tick += (s, e) => { _resultTimer.Stop(); if (_currentLaserCode != null) EnterProcessingState(); else EnterWaitingState(); };
 
             // 注册 USB 扫码枪回车事件（键盘模式）
             SFC_UITextBox.KeyDown += SFC_UITextBox_KeyDown;
@@ -292,9 +292,11 @@ namespace WindowsFormsApp
             OutPut.Text = _lastShiftOutput.ToString();
             _currentShiftOutput = 0;
             uiLabel4.Text = "0";
+            _failCount = 0;
+            FailCount.Text = "0";
             _shiftStartTime = DateTime.Now;
             SaveCounters();
-            AddLogMessage($"换班：本班产出 {_lastShiftOutput}，当班产出已清零。");
+            AddLogMessage($"换班：本班产出 {_lastShiftOutput}，当班产出/FAIL 已清零。");
         }
 
         /// <summary>
@@ -385,7 +387,7 @@ namespace WindowsFormsApp
                 return;
             }
 
-            uiLabel2.Text = "PASS";
+            uiLabel2.Text = "✓ PASS";
             uiLabel2.BackColor = Color.Green;
             uiLabel2.ForeColor = Color.White;
             try { _passSound?.Play(); } catch { }
@@ -394,6 +396,7 @@ namespace WindowsFormsApp
             uiLabel4.Text = _currentShiftOutput.ToString();
             SaveCounters();
 
+            _currentLaserCode = null;
             ClearRecoveryState();
             _resultTimer.Start();
         }
@@ -407,7 +410,7 @@ namespace WindowsFormsApp
                 return;
             }
 
-            uiLabel2.Text = "FAIL";
+            uiLabel2.Text = $"✘ {message}";
             uiLabel2.BackColor = Color.Red;
             uiLabel2.ForeColor = Color.White;
             try { _failSound?.Play(); } catch { }
@@ -495,6 +498,7 @@ namespace WindowsFormsApp
                 }
 
                 // 4. 进入加工中状态
+                try { _passSound?.Play(); } catch { }
                 BeginInvoke(new Action(() => EnterProcessingState()));
             }
             catch (Exception ex)
@@ -580,7 +584,7 @@ namespace WindowsFormsApp
                     ShowFail(bindMsg);
                     return;
                 }
-                AddLogMessage($"Receive: PASS | [{paperCode}] Serializable | {_currentLaserCode}<->{paperCode}", Color.Green, "Receive: PASS");
+                AddLogMessage($"Receive: PASS | [{paperCode}] Serializable | {_currentLaserCode}<->{paperCode}", Color.Green, $"PASS | [{paperCode}] Serializable | {_currentLaserCode}<->{paperCode}");
 
                 // 4. Complete 出站
                 string remark = g_DicMESConfig["Config"].ContainsKey("remark1")
@@ -595,7 +599,7 @@ namespace WindowsFormsApp
 
                 if (cplOk)
                 {
-                    AddLogMessage($"Receive: PASS | [{paperCode}] Complete | Station={stationId}", Color.Green, "Receive: PASS");
+                    AddLogMessage($"Receive: PASS | [{paperCode}] Complete | Station={stationId}", Color.Green, $"PASS | [{paperCode}] Complete | Station={stationId}");
                     BeginInvoke(new Action(() => ShowPass()));
                 }
                 else
@@ -630,7 +634,7 @@ namespace WindowsFormsApp
                 AddLogMessage($"Send: Start | [{SFC}] Station={StationName}, Line={Line}", Color.Black, "Send: Start");
                 bool flag = FormHelper.Start(_mesUrl, _loginId, _clientId, SFC, StationName, Line, ShopOrder, SchingID, out string msg);
                 if (!flag)
-                    AddLogMessage($"Receive: FAIL | [{SFC}] Start | {msg}", Color.Red, "Receive: FAIL");
+                    AddLogMessage($"Receive: FAIL | [{SFC}] Start | {msg}", Color.Red, $"FAIL | [{SFC}] {msg}");
                 else
                     AddLogMessage($"Receive: PASS | [{SFC}] Start | Station={StationName}", Color.Green, "Receive: PASS");
                 return flag;

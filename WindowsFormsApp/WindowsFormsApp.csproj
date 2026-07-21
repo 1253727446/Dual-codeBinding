@@ -44,6 +44,9 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>bin\Debug\ReadWriteLogIni.dll</HintPath>
     </Reference>
+    <Reference Include="SunnyUI">
+      <HintPath>bin\Debug\SunnyUI.dll</HintPath>
+    </Reference>
     <Reference Include="SunnyUI, Version=3.9.6.0, Culture=neutral, PublicKeyToken=3f4ebed4237db5e1, processorArchitecture=MSIL">
       <HintPath>..\packages\SunnyUI.3.9.6\lib\net472\SunnyUI.dll</HintPath>
     </Reference>
