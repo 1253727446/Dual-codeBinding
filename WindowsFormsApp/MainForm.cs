@@ -866,10 +866,6 @@ namespace WindowsFormsApp
                 return now.Date.AddDays(-1).AddHours(_nightShiftStartHour);
             }
         }
-
-        private void uiPanel2_Click(object sender, EventArgs e)
-        {
-            throw new System.NotImplementedException();
-        }
+        
     }
 }
